@@ -9,6 +9,8 @@ mod serialized;
 mod spot_meta;
 mod tx_forwarder;
 
+use std::path::PathBuf;
+
 use block_ingest::BlockIngest;
 use call_forwarder::CallForwarderApiServer;
 use clap::{Args, Parser};
@@ -27,6 +29,9 @@ struct HyperliquidExtArgs {
     /// Forward eth_call and eth_estimateGas to the upstream RPC.
     #[arg(long)]
     pub forward_call: bool,
+
+    #[arg(long, default_value = "/tmp/evm_block_and_receipts")]
+    pub hl_node_blocks_dir: Option<PathBuf>,
 }
 
 fn main() {
@@ -40,6 +45,7 @@ fn main() {
     if let Err(err) = Cli::<EthereumChainSpecParser, HyperliquidExtArgs>::parse().run(
         |builder, ext_args| async move {
             let ingest_dir = builder.config().ingest_dir.clone().expect("ingest dir not set");
+            let local_ingest_dir = ext_args.hl_node_blocks_dir;
             info!(target: "reth::cli", "Launching node");
             let handle = builder
                 .node(EthereumNode::default())
@@ -62,7 +68,7 @@ fn main() {
                 .launch()
                 .await?;
 
-            let ingest = BlockIngest(ingest_dir);
+            let ingest = BlockIngest { ingest_dir, local_ingest_dir };
             ingest.run(handle.node).await.unwrap();
             handle.node_exit_future.await
         },

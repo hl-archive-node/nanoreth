@@ -25,7 +25,10 @@ use tracing::{debug, info};
 use crate::serialized::{BlockAndReceipts, EvmBlock};
 use crate::spot_meta::erc20_contract_to_spot_token;
 
-pub(crate) struct BlockIngest(pub PathBuf);
+pub(crate) struct BlockIngest {
+    pub ingest_dir: PathBuf,
+    pub local_ingest_dir: Option<PathBuf>,
+}
 
 async fn submit_payload<Engine: PayloadTypes + EngineTypes>(
     engine_api_client: &HttpClient<AuthClientService<HttpBackend>>,
@@ -55,9 +58,30 @@ async fn submit_payload<Engine: PayloadTypes + EngineTypes>(
 
 impl BlockIngest {
     pub(crate) fn collect_block(&self, height: u64) -> Option<BlockAndReceipts> {
+        // self.try_collect_local_block(height).or_else(|| self.try_collect_s3_block(height))
+        println!("collectiong s3 block @ {height}");
+        self.try_collect_s3_block(height)
+    }
+
+    pub(crate) fn try_collect_s3_block(&self, height: u64) -> Option<BlockAndReceipts> {
         let f = ((height - 1) / 1_000_000) * 1_000_000;
         let s = ((height - 1) / 1_000) * 1_000;
-        let path = format!("{}/{f}/{s}/{height}.rmp.lz4", self.0.to_string_lossy());
+        let path = format!("{}/{f}/{s}/{height}.rmp.lz4", self.ingest_dir.to_string_lossy());
+        if std::path::Path::new(&path).exists() {
+            let file = std::fs::File::open(path).unwrap();
+            let file = std::io::BufReader::new(file);
+            let mut decoder = lz4_flex::frame::FrameDecoder::new(file);
+            let blocks: Vec<BlockAndReceipts> = rmp_serde::from_read(&mut decoder).unwrap();
+            Some(blocks[0].clone())
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn try_collect_local_block(&self, height: u64) -> Option<BlockAndReceipts> {
+        let f = ((height - 1) / 1_000_000) * 1_000_000;
+        let s = ((height - 1) / 1_000) * 1_000;
+        let path = format!("{}/{f}/{s}/{height}.rmp.lz4", self.ingest_dir.to_string_lossy());
         if std::path::Path::new(&path).exists() {
             let file = std::fs::File::open(path).unwrap();
             let file = std::io::BufReader::new(file);
@@ -93,6 +117,8 @@ impl BlockIngest {
         let mut previous_timestamp =
             std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis();
 
+        let mut last_synced_block_timestamp: Option<u64> = None;
+
         let engine_api = node.auth_server_handle().http_client();
         let mut evm_map = erc20_contract_to_spot_token(node.chain_spec().chain_id()).await?;
 
@@ -105,6 +131,7 @@ impl BlockIngest {
             {
                 debug!(target: "reth::cli", ?block, "Built new payload");
                 let timestamp = block.header().timestamp();
+                println!("new block {height} {timestamp}");
 
                 let block_hash = block.clone().try_recover()?.hash();
                 {
@@ -199,6 +226,7 @@ impl BlockIngest {
                     previous_timestamp = current_timestamp;
                 }
                 previous_hash = block_hash;
+                last_synced_block_timestamp = Some(timestamp);
             }
             height += 1;
         }
