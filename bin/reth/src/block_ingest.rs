@@ -167,7 +167,7 @@ impl BlockIngest {
             .timestamp();
 
         println!("Current height {height}, timestamp {current_block_timestamp}");
-        self.run_local_block_ingestor().await;
+        self.run_local_block_ingestor(head, current_block_timestamp).await;
 
         panic!("STOP");
 
