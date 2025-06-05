@@ -189,7 +189,7 @@ impl BlockIngest {
             loop {
                 let hour_file =
                     root.join("hourly").join(&day_str).join(format!("{hour:02}.{HOURLY_EXT}"));
-                println!("Hour file {:?}", hour_file);
+                println!("Hour file {:?}, {}", hour_file, hour_file.exists());
 
                 if hour_file.exists() {
                     let ScanResult { next_expected_height, new_blocks } =
