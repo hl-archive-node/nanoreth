@@ -192,19 +192,20 @@ impl BlockIngest {
                 println!("Hour file {:?}", hour_file);
 
                 if hour_file.exists() {
-                    let scan_result = scan_hour_file(&hour_file, next_height);
+                    let ScanResult { next_expected_height, new_blocks } =
+                        scan_hour_file(&hour_file, next_height);
                     // Ok(ScanResult { next_expected_height, new_blocks }) => {
-                    // if !new_blocks.is_empty() {
-                    //     let mut w = cache.write().await;
-                    //     for blk in new_blocks {
-                    //         let h = match &blk.block {
-                    //             EvmBlock::Reth115(b) => b.header().number() as u64,
-                    //             _ => continue,
-                    //         };
-                    //         w.insert(h, blk);
-                    //     }
-                    //     next_height = next_expected_height;
-                    // }
+                    if !new_blocks.is_empty() {
+                        // let mut w = cache.write().await;
+                        for blk in new_blocks {
+                            let h = match &blk.block {
+                                EvmBlock::Reth115(b) => b.header().number() as u64,
+                                _ => continue,
+                            };
+                            // w.insert(h, blk);
+                        }
+                        next_height = next_expected_height;
+                    }
                     //     }
                     //     Err(e) => tracing::warn!(?e, "failed to parse hourly file {hour_file:?}"),
                     // }
