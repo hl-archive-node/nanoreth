@@ -10,13 +10,13 @@ use alloy_rpc_types::engine::{
 use jsonrpsee::http_client::{transport::HttpBackend, HttpClient};
 use reth::network::PeersHandleProvider;
 use reth_chainspec::{EthChainSpec, EthereumHardforks};
-use reth_node_api::{FullNodeComponents, PayloadTypes};
+use reth_node_api::{Block, FullNodeComponents, PayloadTypes};
 use reth_node_builder::EngineTypes;
 use reth_node_builder::NodeTypesWithEngine;
 use reth_node_builder::{rpc::RethRpcAddOns, FullNode};
 use reth_payload_builder::{EthBuiltPayload, EthPayloadBuilderAttributes, PayloadId};
 use reth_primitives::{Transaction as TypedTransaction, TransactionSigned};
-use reth_provider::{BlockHashReader, StageCheckpointReader};
+use reth_provider::{BlockHashReader, BlockReader, StageCheckpointReader};
 use reth_rpc_api::EngineApiClient;
 use reth_rpc_layer::AuthClientService;
 use reth_stages::StageId;
@@ -131,20 +131,23 @@ impl BlockIngest {
         let head = checkpoint.unwrap_or_default().block_number;
         let genesis_hash = node.chain_spec().genesis_hash();
 
-        println!("checkpoint {:?}", checkpoint);
-
         let mut height = head + 1;
         let mut previous_hash = provider.block_hash(head)?.unwrap_or(genesis_hash);
         let mut previous_timestamp =
             std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis();
 
-        let mut last_synced_block_timestamp: Option<u64> = None;
+        let current_block_timestamp: u64 = provider
+            .block_by_number(height)
+            .expect("Failed to fetch current block in db")
+            .expect("Block does not exist")
+            .into_header()
+            .timestamp();
 
         let engine_api = node.auth_server_handle().http_client();
         let mut evm_map = erc20_contract_to_spot_token(node.chain_spec().chain_id()).await?;
 
         let dirs = self.fetch_local_blocks_directories();
-        println!("Current height {height}");
+        println!("Current height {height}, timestamp {current_block_timestamp}");
 
         println!("directories {:?}", dirs);
 
@@ -254,7 +257,6 @@ impl BlockIngest {
                     previous_timestamp = current_timestamp;
                 }
                 previous_hash = block_hash;
-                last_synced_block_timestamp = Some(timestamp);
             }
             height += 1;
         }
