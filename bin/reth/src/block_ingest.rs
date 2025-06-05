@@ -175,7 +175,7 @@ impl BlockIngest {
         println!("{}/{}", current_block_date, current_block_hour);
     }
 
-    pub async fn start_local_ingest_loop(&self, current_head: u64, current_ts: u64) {
+    async fn start_local_ingest_loop(&self, current_head: u64, current_ts: u64) {
         let Some(root) = &self.local_ingest_dir else { return }; // nothing to do
         let root = root.to_owned();
         // let cache = self.cache.clone();
@@ -211,11 +211,11 @@ impl BlockIngest {
                 }
 
                 // detect day/hour rollover so file path keeps up with wall‑clock.
-                let now = OffsetDateTime::now_utc();
-                if now.hour() != hour {
-                    hour = now.hour();
-                    day_str = date_from_datetime(now);
-                }
+                // let now = OffsetDateTime::now_utc();
+                // if now.hour() != hour {
+                //     hour = now.hour();
+                //     day_str = date_from_datetime(now);
+                // }
 
                 tokio::time::sleep(TAIL_INTERVAL).await;
             }
