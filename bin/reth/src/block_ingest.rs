@@ -1,4 +1,5 @@
-use std::path::PathBuf;
+use std::io::{BufRead, BufReader};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use alloy_consensus::{BlockBody, BlockHeader, Transaction};
@@ -26,9 +27,49 @@ use tracing::{debug, info};
 use crate::serialized::{BlockAndReceipts, EvmBlock};
 use crate::spot_meta::erc20_contract_to_spot_token;
 
+/// Poll interval when tailing an *open* hourly file.
+const TAIL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
+/// Sub‑directory that contains day folders (inside `local_ingest_dir`).
+const HOURLY_SUBDIR: &str = "hourly";
+/// File extension for hour files (e.g. `13.jsonl`).
+const HOURLY_EXT: &str = "jsonl"; // newline‑delimited JSON (NDJSON)
+
 pub(crate) struct BlockIngest {
     pub ingest_dir: PathBuf,
     pub local_ingest_dir: Option<PathBuf>,
+}
+
+struct ScanResult {
+    next_expected_height: u64,
+    new_blocks: Vec<BlockAndReceipts>,
+}
+
+fn scan_hour_file(path: &Path, start_height: u64) -> ScanResult {
+    println!("scanning {:?}", path);
+    let file = std::fs::File::open(path).expect("Failed to open hour file path");
+    let reader = BufReader::new(file);
+
+    let mut new_blocks = Vec::<BlockAndReceipts>::new();
+    let mut last_height = start_height;
+
+    for line in reader.lines() {
+        let line = line.unwrap();
+        if line.trim().is_empty() {
+            continue;
+        }
+        let blk: BlockAndReceipts = serde_json::from_str(&line).unwrap();
+        println!("parsed block {:?}", blk);
+        let height = match &blk.block {
+            EvmBlock::Reth115(b) => b.header().number() as u64,
+            _ => continue, // unknown variant, skip (future‑proof)
+        };
+        if height >= start_height {
+            last_height = last_height.max(height);
+            new_blocks.push(blk);
+        }
+    }
+
+    ScanResult { next_expected_height: last_height + 1, new_blocks }
 }
 
 async fn submit_payload<Engine: PayloadTypes + EngineTypes>(
@@ -132,6 +173,53 @@ impl BlockIngest {
         let dirs = self.fetch_local_blocks_directories();
 
         println!("{}/{}", current_block_date, current_block_hour);
+    }
+
+    pub async fn start_local_ingest_loop(&self, current_head: u64, current_ts: u64) {
+        let Some(root) = &self.local_ingest_dir else { return }; // nothing to do
+        let root = root.to_owned();
+        // let cache = self.cache.clone();
+
+        tokio::spawn(async move {
+            let mut next_height = current_head + 1;
+            let mut dt = datetime_from_timestamp(current_ts);
+            let mut hour = dt.hour();
+            let mut day_str = date_from_datetime(dt);
+
+            loop {
+                let hour_file =
+                    root.join("hourly").join(&day_str).join(format!("{hour:02}.{HOURLY_EXT}"));
+                println!("Hour file {:?}", hour_file);
+
+                if hour_file.exists() {
+                    let scan_result = scan_hour_file(&hour_file, next_height);
+                    // Ok(ScanResult { next_expected_height, new_blocks }) => {
+                    // if !new_blocks.is_empty() {
+                    //     let mut w = cache.write().await;
+                    //     for blk in new_blocks {
+                    //         let h = match &blk.block {
+                    //             EvmBlock::Reth115(b) => b.header().number() as u64,
+                    //             _ => continue,
+                    //         };
+                    //         w.insert(h, blk);
+                    //     }
+                    //     next_height = next_expected_height;
+                    // }
+                    //     }
+                    //     Err(e) => tracing::warn!(?e, "failed to parse hourly file {hour_file:?}"),
+                    // }
+                }
+
+                // detect day/hour rollover so file path keeps up with wall‑clock.
+                let now = OffsetDateTime::now_utc();
+                if now.hour() != hour {
+                    hour = now.hour();
+                    day_str = date_from_datetime(now);
+                }
+
+                tokio::time::sleep(TAIL_INTERVAL).await;
+            }
+        });
     }
 
     pub(crate) async fn run<Node, Engine, AddOns>(
