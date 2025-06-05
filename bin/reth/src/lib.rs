@@ -29,6 +29,7 @@
 
 pub mod cli;
 pub mod commands;
+mod time;
 
 /// Re-exported utils.
 pub mod utils {
@@ -37,6 +38,7 @@ pub mod utils {
     /// Re-exported from `reth_node_core`, also to prevent a breaking change. See the comment
     /// on the `reth_node_core::args` re-export for more details.
     pub use reth_node_core::utils::*;
+    pub use time;
 }
 
 /// Re-exported payload related types

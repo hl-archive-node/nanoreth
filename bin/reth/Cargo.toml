@@ -84,6 +84,9 @@ serde_json.workspace = true
 tokio = { workspace = true, features = ["sync", "macros", "time", "rt-multi-thread"] }
 futures.workspace = true
 
+# time
+time = { workspace = true }
+
 # misc
 aquamarine.workspace = true
 eyre.workspace = true

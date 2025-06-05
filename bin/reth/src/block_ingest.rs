@@ -63,6 +63,23 @@ impl BlockIngest {
         self.try_collect_s3_block(height)
     }
 
+    fn fetch_local_blocks(&self) -> Vec<std::path::PathBuf> {
+        let mut dirs = Vec::new();
+
+        for entry_result in std::fs::read_dir(self.local_ingest_dir.as_ref().unwrap())
+            .expect("Local blocks directory does not exist")
+        {
+            let entry = entry_result.unwrap();
+            let file_type = entry.file_type().unwrap();
+
+            if file_type.is_dir() {
+                dirs.push(entry.path());
+            }
+        }
+
+        dirs
+    }
+
     pub(crate) fn try_collect_s3_block(&self, height: u64) -> Option<BlockAndReceipts> {
         let f = ((height - 1) / 1_000_000) * 1_000_000;
         let s = ((height - 1) / 1_000) * 1_000;
@@ -121,6 +138,11 @@ impl BlockIngest {
 
         let engine_api = node.auth_server_handle().http_client();
         let mut evm_map = erc20_contract_to_spot_token(node.chain_spec().chain_id()).await?;
+
+        let dirs = self.fetch_local_blocks();
+        println!("directories {:?}", dirs);
+
+        panic!("STOP");
 
         loop {
             let Some(original_block) = self.collect_block(height) else {
