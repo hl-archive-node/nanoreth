@@ -122,6 +122,16 @@ impl BlockIngest {
         }
     }
 
+    // Initialises at current header and starts reading local evm blocks and indexing them into a
+    // map so that they can be picked off by collect_block
+    // If timestamp cannot be found, does nothing
+    async fn run_local_block_ingestor(&self, current_head: u64, current_head_timestamp: u64) {
+        let current_block_timestamp = datetime_from_timestamp(current_head_timestamp);
+        let current_block_hour = current_block_timestamp.hour();
+        let current_block_date = date_from_datetime(current_block_timestamp);
+        let dirs = self.fetch_local_blocks_directories();
+    }
+
     pub(crate) async fn run<Node, Engine, AddOns>(
         &self,
         node: FullNode<Node, AddOns>,
@@ -146,21 +156,18 @@ impl BlockIngest {
         let mut previous_timestamp =
             std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis();
 
+        let engine_api = node.auth_server_handle().http_client();
+        let mut evm_map = erc20_contract_to_spot_token(node.chain_spec().chain_id()).await?;
+
         let current_block_timestamp: u64 = provider
-            .block_by_number(height - 1)
+            .block_by_number(head)
             .expect("Failed to fetch current block in db")
             .expect("Block does not exist")
             .into_header()
             .timestamp();
-        let current_block_timestamp = datetime_from_timestamp(current_block_timestamp);
 
-        let engine_api = node.auth_server_handle().http_client();
-        let mut evm_map = erc20_contract_to_spot_token(node.chain_spec().chain_id()).await?;
-
-        let dirs = self.fetch_local_blocks_directories();
         println!("Current height {height}, timestamp {current_block_timestamp}");
-
-        println!("directories {:?}", dirs);
+        self.run_local_block_ingestor().await;
 
         panic!("STOP");
 
@@ -173,7 +180,6 @@ impl BlockIngest {
             {
                 debug!(target: "reth::cli", ?block, "Built new payload");
                 let timestamp = block.header().timestamp();
-                println!("new block {height} {timestamp}");
 
                 let block_hash = block.clone().try_recover()?.hash();
                 {
