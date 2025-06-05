@@ -109,8 +109,6 @@ pub fn date_from_datetime(dt: OffsetDateTime) -> String {
 
 impl BlockIngest {
     pub(crate) fn collect_block(&self, height: u64) -> Option<BlockAndReceipts> {
-        // self.try_collect_local_block(height).or_else(|| self.try_collect_s3_block(height))
-        println!("collectiong s3 block @ {height}");
         self.try_collect_s3_block(height)
     }
 
@@ -259,9 +257,6 @@ impl BlockIngest {
 
         println!("Current height {height}, timestamp {current_block_timestamp}");
         self.start_local_ingest_loop(head, current_block_timestamp).await;
-
-        // panic!("STOP");
-        tokio::time::sleep(std::time::Duration::from_secs(86400)).await;
 
         loop {
             let Some(original_block) = self.collect_block(height) else {
