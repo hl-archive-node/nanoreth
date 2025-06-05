@@ -137,7 +137,7 @@ impl BlockIngest {
             std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis();
 
         let current_block_timestamp: u64 = provider
-            .block_by_number(height)
+            .block_by_number(height - 1)
             .expect("Failed to fetch current block in db")
             .expect("Block does not exist")
             .into_header()
