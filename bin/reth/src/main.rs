@@ -31,7 +31,7 @@ struct HyperliquidExtArgs {
     pub forward_call: bool,
 
     #[arg(long, default_value = "/tmp/evm_block_and_receipts")]
-    pub hl_node_blocks_dir: Option<PathBuf>,
+    pub local_ingest_dir: Option<PathBuf>,
 }
 
 fn main() {
