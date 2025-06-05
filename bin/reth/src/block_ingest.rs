@@ -130,6 +130,8 @@ impl BlockIngest {
         let current_block_hour = current_block_timestamp.hour();
         let current_block_date = date_from_datetime(current_block_timestamp);
         let dirs = self.fetch_local_blocks_directories();
+
+        println!("{}/{}", current_block_date, current_block_hour);
     }
 
     pub(crate) async fn run<Node, Engine, AddOns>(
