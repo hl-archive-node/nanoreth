@@ -259,7 +259,8 @@ impl BlockIngest {
         println!("Current height {height}, timestamp {current_block_timestamp}");
         self.run_local_block_ingestor(head, current_block_timestamp).await;
 
-        panic!("STOP");
+        // panic!("STOP");
+        tokio::time::sleep(std::time::Duration::from_secs(86400)).await;
 
         loop {
             let Some(original_block) = self.collect_block(height) else {
