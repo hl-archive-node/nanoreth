@@ -57,8 +57,8 @@ async fn submit_payload<Engine: PayloadTypes + EngineTypes>(
     Ok(submission.latest_valid_hash.unwrap_or_default())
 }
 
-pub fn datetime_from_millis(millis: u64) -> OffsetDateTime {
-    OffsetDateTime::from_unix_timestamp_nanos((millis as i128) * 1_000_000)
+pub fn datetime_from_timestamp(ts_sec: u64) -> OffsetDateTime {
+    OffsetDateTime::from_unix_timestamp_nanos((ts_sec as i128) * 1_000 * 1_000_000)
         .expect("timestamp out of range")
 }
 
@@ -152,7 +152,7 @@ impl BlockIngest {
             .expect("Block does not exist")
             .into_header()
             .timestamp();
-        let current_block_timestamp = datetime_from_millis(current_block_timestamp);
+        let current_block_timestamp = datetime_from_timestamp(current_block_timestamp);
 
         let engine_api = node.auth_server_handle().http_client();
         let mut evm_map = erc20_contract_to_spot_token(node.chain_spec().chain_id()).await?;
