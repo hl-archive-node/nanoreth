@@ -63,11 +63,14 @@ impl BlockIngest {
         self.try_collect_s3_block(height)
     }
 
-    fn fetch_local_blocks(&self) -> Vec<std::path::PathBuf> {
+    fn fetch_local_blocks_directories(&self) -> Vec<std::path::PathBuf> {
         let mut dirs = Vec::new();
+        // Where hourly block data per day is stored, each directory is a day with files for each
+        // hour of the day
+        let day_data_subdir = self.local_ingest_dir.as_ref().unwrap().join("hourly");
 
-        for entry_result in std::fs::read_dir(self.local_ingest_dir.as_ref().unwrap())
-            .expect("Local blocks directory does not exist")
+        for entry_result in
+            std::fs::read_dir(day_data_subdir).expect("Local blocks directory does not exist")
         {
             let entry = entry_result.unwrap();
             let file_type = entry.file_type().unwrap();
@@ -139,7 +142,7 @@ impl BlockIngest {
         let engine_api = node.auth_server_handle().http_client();
         let mut evm_map = erc20_contract_to_spot_token(node.chain_spec().chain_id()).await?;
 
-        let dirs = self.fetch_local_blocks();
+        let dirs = self.fetch_local_blocks_directories();
         println!("directories {:?}", dirs);
 
         panic!("STOP");
