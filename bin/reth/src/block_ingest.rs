@@ -79,7 +79,6 @@ impl BlockIngest {
                 dirs.push(entry.path());
             }
         }
-
         dirs
     }
 
@@ -132,6 +131,8 @@ impl BlockIngest {
         let head = checkpoint.unwrap_or_default().block_number;
         let genesis_hash = node.chain_spec().genesis_hash();
 
+        println!("checkpoint {:?}", checkpoint);
+
         let mut height = head + 1;
         let mut previous_hash = provider.block_hash(head)?.unwrap_or(genesis_hash);
         let mut previous_timestamp =
@@ -143,6 +144,8 @@ impl BlockIngest {
         let mut evm_map = erc20_contract_to_spot_token(node.chain_spec().chain_id()).await?;
 
         let dirs = self.fetch_local_blocks_directories();
+        println!("Current height {height}");
+
         println!("directories {:?}", dirs);
 
         panic!("STOP");
