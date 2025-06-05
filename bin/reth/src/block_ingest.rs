@@ -20,6 +20,7 @@ use reth_provider::{BlockHashReader, BlockReader, StageCheckpointReader};
 use reth_rpc_api::EngineApiClient;
 use reth_rpc_layer::AuthClientService;
 use reth_stages::StageId;
+use time::{format_description, OffsetDateTime};
 use tracing::{debug, info};
 
 use crate::serialized::{BlockAndReceipts, EvmBlock};
@@ -54,6 +55,15 @@ async fn submit_payload<Engine: PayloadTypes + EngineTypes>(
     assert_eq!(submission.status.as_str(), expected_status.as_str());
 
     Ok(submission.latest_valid_hash.unwrap_or_default())
+}
+
+pub fn datetime_from_millis(millis: u64) -> OffsetDateTime {
+    OffsetDateTime::from_unix_timestamp_nanos((millis as i128) * 1_000_000)
+        .expect("timestamp out of range")
+}
+
+pub fn date_from_datetime(dt: OffsetDateTime) -> String {
+    dt.format(&format_description::parse("[year][month][day]").unwrap()).unwrap()
 }
 
 impl BlockIngest {
@@ -142,6 +152,7 @@ impl BlockIngest {
             .expect("Block does not exist")
             .into_header()
             .timestamp();
+        let current_block_timestamp = datetime_from_millis(current_block_timestamp);
 
         let engine_api = node.auth_server_handle().http_client();
         let mut evm_map = erc20_contract_to_spot_token(node.chain_spec().chain_id()).await?;
