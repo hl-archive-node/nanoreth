@@ -21,7 +21,7 @@ use reth_provider::{BlockHashReader, BlockReader, StageCheckpointReader};
 use reth_rpc_api::EngineApiClient;
 use reth_rpc_layer::AuthClientService;
 use reth_stages::StageId;
-use time::{format_description, OffsetDateTime};
+use time::{format_description, Duration, OffsetDateTime};
 use tracing::{debug, info};
 
 use crate::serialized::{BlockAndReceipts, EvmBlock};
@@ -208,12 +208,16 @@ impl BlockIngest {
                     // }
                 }
 
-                // detect day/hour rollover so file path keeps up with wall‑clock.
-                // let now = OffsetDateTime::now_utc();
-                // if now.hour() != hour {
-                //     hour = now.hour();
-                //     day_str = date_from_datetime(now);
-                // }
+                // Decide whether the *current* hour file is closed (past) or
+                // still live. If it’s in the past by ≥ 1 h, move to next hour;
+                // otherwise, keep tailing the same file.
+                let now = OffsetDateTime::now_utc();
+                if dt + Duration::HOUR <= now {
+                    println!("MOVING TO NEW FILE");
+
+                    dt += Duration::HOUR; // advance sequentially (handles day rollover)
+                    continue; // immediately inspect the next hour file
+                }
 
                 tokio::time::sleep(TAIL_INTERVAL).await;
             }
