@@ -185,8 +185,7 @@ impl BlockIngest {
             let mut day_str = date_from_datetime(dt);
 
             loop {
-                let hour_file =
-                    root.join("hourly").join(&day_str).join(format!("{hour:02}.{HOURLY_EXT}"));
+                let hour_file = root.join("hourly").join(&day_str).join(format!("{hour}"));
                 println!("Hour file {:?}, {}", hour_file, hour_file.exists());
 
                 if hour_file.exists() {
