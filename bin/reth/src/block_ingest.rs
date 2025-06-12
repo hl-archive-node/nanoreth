@@ -61,7 +61,6 @@ fn scan_hour_file(path: &Path, start_height: u64) -> ScanResult {
         }
         let LocalBlockAndReceipts(_block_timestamp, parsed_block): LocalBlockAndReceipts =
             serde_json::from_str(&line).unwrap();
-        println!("parsed block {:?}", parsed_block);
         let height = match &parsed_block.block {
             EvmBlock::Reth115(b) => b.header().number() as u64,
             _ => continue, // unknown variant, skip (future‑proof)
