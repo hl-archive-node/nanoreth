@@ -221,7 +221,8 @@ impl BlockIngest {
                 if dt + Duration::HOUR <= now {
                     println!("MOVING TO NEW FILE CURRENT {:?}", dt);
                     dt += Duration::HOUR; // advance sequentially (handles day rollover)
-                    println!("MOVING TO NEW FILE NEW {:?}", dt);
+                    hour = dt.hour();
+                    day_str = date_from_datetime(dt);
                     continue; // immediately inspect the next hour file
                 }
 
