@@ -74,7 +74,6 @@ fn scan_hour_file(path: &Path, start_height: u64) -> ScanResult {
             }
             _ => continue, // unknown variant, skip (future‑proof)
         };
-        println!("new height {:?} old height {:?}", height, start_height);
         if height >= start_height {
             last_height = last_height.max(height);
             new_blocks.push(parsed_block);
@@ -188,10 +187,6 @@ impl BlockIngest {
                             let h = match &blk.block {
                                 EvmBlock::Reth115(b) => {
                                     let block_number = b.header().number() as u64;
-                                    println!(
-                                        "new block number pushing to cache {:?}",
-                                        block_number
-                                    );
                                     block_number
                                 }
                                 _ => continue,
