@@ -9,7 +9,7 @@ mod serialized;
 mod spot_meta;
 mod tx_forwarder;
 
-use std::{collections::BTreeMap, path::PathBuf};
+use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 
 use block_ingest::BlockIngest;
 use call_forwarder::CallForwarderApiServer;
