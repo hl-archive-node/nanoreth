@@ -38,7 +38,7 @@ const HOURLY_SUBDIR: &str = "hourly";
 pub(crate) struct BlockIngest {
     pub ingest_dir: PathBuf,
     pub local_ingest_dir: Option<PathBuf>,
-    local_blocks_cache: Arc<Mutex<BTreeMap<u64, BlockAndReceipts>>>, // height → block
+    pub local_blocks_cache: Arc<Mutex<BTreeMap<u64, BlockAndReceipts>>>, // height → block
 }
 
 #[derive(Deserialize)]

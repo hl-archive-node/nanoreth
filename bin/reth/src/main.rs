@@ -9,7 +9,7 @@ mod serialized;
 mod spot_meta;
 mod tx_forwarder;
 
-use std::path::PathBuf;
+use std::{collections::BTreeMap, path::PathBuf};
 
 use block_ingest::BlockIngest;
 use call_forwarder::CallForwarderApiServer;
@@ -17,6 +17,7 @@ use clap::{Args, Parser};
 use reth::cli::Cli;
 use reth_ethereum_cli::chainspec::EthereumChainSpecParser;
 use reth_node_ethereum::EthereumNode;
+use tokio::sync::Mutex;
 use tracing::info;
 use tx_forwarder::EthForwarderApiServer;
 
@@ -68,7 +69,11 @@ fn main() {
                 .launch()
                 .await?;
 
-            let ingest = BlockIngest { ingest_dir, local_ingest_dir };
+            let ingest = BlockIngest {
+                ingest_dir,
+                local_ingest_dir,
+                local_blocks_cache: Arc::new(Mutex::new(BTreeMap::new())),
+            };
             ingest.run(handle.node).await.unwrap();
             handle.node_exit_future.await
         },
