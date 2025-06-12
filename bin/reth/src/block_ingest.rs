@@ -120,8 +120,8 @@ pub fn date_from_datetime(dt: OffsetDateTime) -> String {
 
 impl BlockIngest {
     pub(crate) async fn collect_block(&self, height: u64) -> Option<BlockAndReceipts> {
-        self.try_collect_s3_block(height)
-        // self.try_collect_local_block(height).await.or_else(|| self.try_collect_s3_block(height))
+        // self.try_collect_s3_block(height)
+        self.try_collect_local_block(height).await.or_else(|| self.try_collect_s3_block(height))
     }
 
     fn fetch_local_blocks_directories(&self) -> Vec<std::path::PathBuf> {
@@ -160,8 +160,9 @@ impl BlockIngest {
 
     async fn try_collect_local_block(&self, height: u64) -> Option<BlockAndReceipts> {
         let mut u_cache = self.local_blocks_cache.lock().await;
-        println!("cache has height {:?} ? {:?}", height, u_cache.contains_key(&height));
-        u_cache.remove(&height)
+        let block = u_cache.remove(&height);
+        println!("returning {:?}", block);
+        block
     }
 
     async fn start_local_ingest_loop(&self, current_head: u64, current_ts: u64) {
