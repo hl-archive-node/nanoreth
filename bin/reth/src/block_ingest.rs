@@ -50,7 +50,7 @@ struct ScanResult {
 }
 
 fn scan_hour_file(path: &Path, start_height: u64) -> ScanResult {
-    println!("scanning {:?}", path);
+    println!("scanning {:?} {:?}", path, start_height);
     let file = std::fs::File::open(path).expect("Failed to open hour file path");
     let reader = BufReader::new(file);
 
@@ -67,7 +67,7 @@ fn scan_hour_file(path: &Path, start_height: u64) -> ScanResult {
         let height = match &parsed_block.block {
             EvmBlock::Reth115(b) => {
                 let block_number = b.header().number() as u64;
-                if block_number < start_height - 1 {
+                if block_number < start_height - 2 {
                     continue;
                 }
                 block_number
