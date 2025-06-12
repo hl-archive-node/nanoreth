@@ -21,6 +21,7 @@ use reth_provider::{BlockHashReader, BlockReader, StageCheckpointReader};
 use reth_rpc_api::EngineApiClient;
 use reth_rpc_layer::AuthClientService;
 use reth_stages::StageId;
+use serde::Deserialize;
 use time::{format_description, Duration, OffsetDateTime};
 use tracing::{debug, info};
 
@@ -31,13 +32,14 @@ use crate::spot_meta::erc20_contract_to_spot_token;
 const TAIL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
 /// Sub‑directory that contains day folders (inside `local_ingest_dir`).
 const HOURLY_SUBDIR: &str = "hourly";
-/// File extension for hour files (e.g. `13.jsonl`).
-const HOURLY_EXT: &str = "jsonl"; // newline‑delimited JSON (NDJSON)
 
 pub(crate) struct BlockIngest {
     pub ingest_dir: PathBuf,
     pub local_ingest_dir: Option<PathBuf>,
 }
+
+#[derive(Deserialize)]
+struct LocalBlockAndReceipts(String, BlockAndReceipts);
 
 struct ScanResult {
     next_expected_height: u64,
@@ -57,9 +59,10 @@ fn scan_hour_file(path: &Path, start_height: u64) -> ScanResult {
         if line.trim().is_empty() {
             continue;
         }
-        let blk: BlockAndReceipts = serde_json::from_str(&line).unwrap();
-        println!("parsed block {:?}", blk);
-        let height = match &blk.block {
+        let (_block_timestamp, parsed_block): LocalBlockAndReceipts =
+            serde_json::from_str(&line).unwrap();
+        println!("parsed block {:?}", parsed_block);
+        let height = match &parsed_block.block {
             EvmBlock::Reth115(b) => b.header().number() as u64,
             _ => continue, // unknown variant, skip (future‑proof)
         };
