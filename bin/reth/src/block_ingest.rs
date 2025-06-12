@@ -170,7 +170,7 @@ impl BlockIngest {
         let cache = self.local_blocks_cache.clone();
 
         tokio::spawn(async move {
-            let mut next_height = current_head + 1;
+            let mut next_height = current_head;
             let mut dt = datetime_from_timestamp(current_ts);
             let mut hour = dt.hour();
             let mut day_str = date_from_datetime(dt);
