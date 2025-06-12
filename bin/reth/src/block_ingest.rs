@@ -67,7 +67,7 @@ fn scan_hour_file(path: &Path, start_height: u64) -> ScanResult {
         let height = match &parsed_block.block {
             EvmBlock::Reth115(b) => {
                 let block_number = b.header().number() as u64;
-                if block_number <= start_height {
+                if block_number < start_height {
                     continue;
                 }
                 block_number
@@ -159,7 +159,6 @@ impl BlockIngest {
 
     async fn try_collect_local_block(&self, height: u64) -> Option<BlockAndReceipts> {
         let mut u_cache = self.local_blocks_cache.lock().await;
-        println!("cache has height {:?} ? {:?}", height, u_cache.contains_key(&height));
         u_cache.remove(&height)
     }
 
@@ -187,10 +186,6 @@ impl BlockIngest {
                             let h = match &blk.block {
                                 EvmBlock::Reth115(b) => {
                                     let block_number = b.header().number() as u64;
-                                    println!(
-                                        "new block number pushing to cache {:?}",
-                                        block_number
-                                    );
                                     block_number
                                 }
                                 _ => continue,
