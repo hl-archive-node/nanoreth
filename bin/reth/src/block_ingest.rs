@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -23,6 +24,7 @@ use reth_rpc_layer::AuthClientService;
 use reth_stages::StageId;
 use serde::Deserialize;
 use time::{format_description, Duration, OffsetDateTime};
+use tokio::sync::Mutex;
 use tracing::{debug, info};
 
 use crate::serialized::{BlockAndReceipts, EvmBlock};
@@ -36,6 +38,7 @@ const HOURLY_SUBDIR: &str = "hourly";
 pub(crate) struct BlockIngest {
     pub ingest_dir: PathBuf,
     pub local_ingest_dir: Option<PathBuf>,
+    local_blocks_cache: Arc<Mutex<BTreeMap<u64, BlockAndReceipts>>>, // height → block
 }
 
 #[derive(Deserialize)]
@@ -67,7 +70,6 @@ fn scan_hour_file(path: &Path, start_height: u64) -> ScanResult {
                 if block_number <= start_height {
                     continue;
                 }
-                println!("parsed block height {:?}", block_number);
                 block_number
             }
             _ => continue, // unknown variant, skip (future‑proof)
@@ -117,8 +119,8 @@ pub fn date_from_datetime(dt: OffsetDateTime) -> String {
 }
 
 impl BlockIngest {
-    pub(crate) fn collect_block(&self, height: u64) -> Option<BlockAndReceipts> {
-        self.try_collect_s3_block(height)
+    pub(crate) async fn collect_block(&self, height: u64) -> Option<BlockAndReceipts> {
+        self.try_collect_local_block(height).await.or_else(|| self.try_collect_s3_block(height))
     }
 
     fn fetch_local_blocks_directories(&self) -> Vec<std::path::PathBuf> {
@@ -155,37 +157,15 @@ impl BlockIngest {
         }
     }
 
-    pub(crate) fn try_collect_local_block(&self, height: u64) -> Option<BlockAndReceipts> {
-        let f = ((height - 1) / 1_000_000) * 1_000_000;
-        let s = ((height - 1) / 1_000) * 1_000;
-        let path = format!("{}/{f}/{s}/{height}.rmp.lz4", self.ingest_dir.to_string_lossy());
-        if std::path::Path::new(&path).exists() {
-            let file = std::fs::File::open(path).unwrap();
-            let file = std::io::BufReader::new(file);
-            let mut decoder = lz4_flex::frame::FrameDecoder::new(file);
-            let blocks: Vec<BlockAndReceipts> = rmp_serde::from_read(&mut decoder).unwrap();
-            Some(blocks[0].clone())
-        } else {
-            None
-        }
-    }
-
-    // Initialises at current header and starts reading local evm blocks and indexing them into a
-    // map so that they can be picked off by collect_block
-    // If timestamp cannot be found, does nothing
-    async fn run_local_block_ingestor(&self, current_head: u64, current_head_timestamp: u64) {
-        let current_block_timestamp = datetime_from_timestamp(current_head_timestamp);
-        let current_block_hour = current_block_timestamp.hour();
-        let current_block_date = date_from_datetime(current_block_timestamp);
-        let dirs = self.fetch_local_blocks_directories();
-
-        println!("{}/{}", current_block_date, current_block_hour);
+    async fn try_collect_local_block(&self, height: u64) -> Option<BlockAndReceipts> {
+        let mut u_cache = self.local_blocks_cache.lock().await;
+        u_cache.remove(&height)
     }
 
     async fn start_local_ingest_loop(&self, current_head: u64, current_ts: u64) {
         let Some(root) = &self.local_ingest_dir else { return }; // nothing to do
         let root = root.to_owned();
-        // let cache = self.cache.clone();
+        let cache = self.local_blocks_cache.clone();
 
         tokio::spawn(async move {
             let mut next_height = current_head + 1;
@@ -200,21 +180,17 @@ impl BlockIngest {
                 if hour_file.exists() {
                     let ScanResult { next_expected_height, new_blocks } =
                         scan_hour_file(&hour_file, next_height);
-                    // Ok(ScanResult { next_expected_height, new_blocks }) => {
                     if !new_blocks.is_empty() {
-                        // let mut w = cache.write().await;
+                        let mut u_cache = cache.lock().await;
                         for blk in new_blocks {
                             let h = match &blk.block {
                                 EvmBlock::Reth115(b) => b.header().number() as u64,
                                 _ => continue,
                             };
-                            // w.insert(h, blk);
+                            u_cache.insert(h, blk);
                         }
                         next_height = next_expected_height;
                     }
-                    //     }
-                    //     Err(e) => tracing::warn!(?e, "failed to parse hourly file {hour_file:?}"),
-                    // }
                 }
 
                 // Decide whether the *current* hour file is closed (past) or
@@ -271,7 +247,7 @@ impl BlockIngest {
         self.start_local_ingest_loop(head, current_block_timestamp).await;
 
         loop {
-            let Some(original_block) = self.collect_block(height) else {
+            let Some(original_block) = self.collect_block(height).await else {
                 tokio::time::sleep(std::time::Duration::from_millis(200)).await;
                 continue;
             };
