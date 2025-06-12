@@ -67,7 +67,7 @@ fn scan_hour_file(path: &Path, start_height: u64) -> ScanResult {
         let height = match &parsed_block.block {
             EvmBlock::Reth115(b) => {
                 let block_number = b.header().number() as u64;
-                if block_number < start_height {
+                if block_number < start_height - 1 {
                     continue;
                 }
                 block_number
