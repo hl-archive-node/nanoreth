@@ -59,7 +59,7 @@ fn scan_hour_file(path: &Path, start_height: u64) -> ScanResult {
         if line.trim().is_empty() {
             continue;
         }
-        let (_block_timestamp, parsed_block): LocalBlockAndReceipts =
+        let LocalBlockAndReceipts(_block_timestamp, parsed_block): LocalBlockAndReceipts =
             serde_json::from_str(&line).unwrap();
         println!("parsed block {:?}", parsed_block);
         let height = match &parsed_block.block {
@@ -68,7 +68,7 @@ fn scan_hour_file(path: &Path, start_height: u64) -> ScanResult {
         };
         if height >= start_height {
             last_height = last_height.max(height);
-            new_blocks.push(blk);
+            new_blocks.push(parsed_block);
         }
     }
 
