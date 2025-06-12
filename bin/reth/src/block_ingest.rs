@@ -120,7 +120,8 @@ pub fn date_from_datetime(dt: OffsetDateTime) -> String {
 
 impl BlockIngest {
     pub(crate) async fn collect_block(&self, height: u64) -> Option<BlockAndReceipts> {
-        self.try_collect_local_block(height).await.or_else(|| self.try_collect_s3_block(height))
+        self.try_collect_s3_block(height)
+        // self.try_collect_local_block(height).await.or_else(|| self.try_collect_s3_block(height))
     }
 
     fn fetch_local_blocks_directories(&self) -> Vec<std::path::PathBuf> {
