@@ -165,7 +165,6 @@ impl BlockIngest {
     async fn try_collect_local_block(&self, height: u64) -> Option<BlockAndReceipts> {
         let mut u_cache = self.local_blocks_cache.lock().await;
         let block = u_cache.remove(&height);
-        println!("returning {:?}", block);
         block
     }
 
