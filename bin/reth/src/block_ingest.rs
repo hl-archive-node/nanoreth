@@ -159,6 +159,7 @@ impl BlockIngest {
 
     async fn try_collect_local_block(&self, height: u64) -> Option<BlockAndReceipts> {
         let mut u_cache = self.local_blocks_cache.lock().await;
+        println!("cache has height {:?} ? {:?}", u_cache.contains_key(&height));
         u_cache.remove(&height)
     }
 
@@ -184,7 +185,14 @@ impl BlockIngest {
                         let mut u_cache = cache.lock().await;
                         for blk in new_blocks {
                             let h = match &blk.block {
-                                EvmBlock::Reth115(b) => b.header().number() as u64,
+                                EvmBlock::Reth115(b) => {
+                                    let block_number = b.header().number() as u64;
+                                    println!(
+                                        "new block number pushing to cache {:?}",
+                                        block_number
+                                    );
+                                    block_number
+                                }
                                 _ => continue,
                             };
                             u_cache.insert(h, blk);
