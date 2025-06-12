@@ -219,9 +219,9 @@ impl BlockIngest {
                 // otherwise, keep tailing the same file.
                 let now = OffsetDateTime::now_utc();
                 if dt + Duration::HOUR <= now {
-                    println!("MOVING TO NEW FILE");
-
+                    println!("MOVING TO NEW FILE CURRENT {:?}", dt);
                     dt += Duration::HOUR; // advance sequentially (handles day rollover)
+                    println!("MOVING TO NEW FILE NEW {:?}", dt);
                     continue; // immediately inspect the next hour file
                 }
 
