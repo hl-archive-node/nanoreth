@@ -124,7 +124,7 @@ impl BlockIngest {
         let local_block = self.try_collect_local_block(height).await;
         println!("Local Block {:#?}", local_block);
         println!("s3 Block {:#?}", s3_block);
-        local_block
+        s3_block
         // self.try_collect_local_block(height).await.or_else(|| self.try_collect_s3_block(height))
     }
 
