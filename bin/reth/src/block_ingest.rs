@@ -64,6 +64,9 @@ fn scan_hour_file(path: &Path, start_height: u64) -> ScanResult {
         let height = match &parsed_block.block {
             EvmBlock::Reth115(b) => {
                 let block_number = b.header().number() as u64;
+                if block_number <= start_height {
+                    continue;
+                }
                 println!("parsed block height {:?}", block_number);
                 block_number
             }
@@ -219,7 +222,6 @@ impl BlockIngest {
                 // otherwise, keep tailing the same file.
                 let now = OffsetDateTime::now_utc();
                 if dt + Duration::HOUR <= now {
-                    println!("MOVING TO NEW FILE CURRENT {:?}", dt);
                     dt += Duration::HOUR; // advance sequentially (handles day rollover)
                     hour = dt.hour();
                     day_str = date_from_datetime(dt);
