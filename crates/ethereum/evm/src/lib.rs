@@ -307,13 +307,15 @@ impl EvmFactory<EvmEnv> for HyperliquidEvmFactory {
     type Context<DB: Database> = EthEvmContext<DB>;
 
     fn create_evm<DB: Database>(&self, db: DB, input: EvmEnv) -> Self::Evm<DB, NoOpInspector> {
-        let cache = collect_block(
+        let block = collect_block(
             self.ingest_dir.clone().unwrap(),
             self.local_ingest_dir.clone(),
             input.block_env.number,
         )
-        .unwrap()
-        .read_precompile_calls;
+        .unwrap();
+        let cache = block.read_precompile_calls;
+
+        println!("got a local block {:?}", block.block);
         let evm = Context::mainnet()
             .with_db(db)
             .with_cfg(input.cfg_env)
@@ -329,6 +331,7 @@ impl EvmFactory<EvmEnv> for HyperliquidEvmFactory {
                 )),
             ));
 
+        println!("created evm");
         EthEvm::new(evm, false)
     }
 
