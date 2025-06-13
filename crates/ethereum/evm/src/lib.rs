@@ -275,7 +275,7 @@ pub(crate) fn collect_local_block(
                     serde_json::from_str(&line).expect("Failed to deserialize local reth block.");
                 if let EvmBlock::Reth115(b) = &blk.1.block {
                     if b.header().number() as u64 == height {
-                        return Some(blk);
+                        return Some(blk.1);
                     }
                 }
             }
