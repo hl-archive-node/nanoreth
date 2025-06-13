@@ -241,6 +241,7 @@ impl BlockIngest {
                 tokio::time::sleep(std::time::Duration::from_millis(200)).await;
                 continue;
             };
+            println!("Original Block {:?}", original_block);
             let EvmBlock::Reth115(mut block) = original_block.block;
             {
                 debug!(target: "reth::cli", ?block, "Built new payload");
