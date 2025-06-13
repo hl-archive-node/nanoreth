@@ -290,10 +290,10 @@ pub(crate) fn collect_block(
     height: u64,
 ) -> Option<BlockAndReceipts> {
     if let Some(block) = collect_s3_block(ingest_path, height) {
-        println!("Returning s3 block");
+        println!("Returning s3 block {height}");
         Some(block)
     } else {
-        println!("Returning  local block");
+        println!("Returning local block {height}");
         collect_local_block(local_ingest_path, height)
     }
 }
