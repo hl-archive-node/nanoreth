@@ -50,7 +50,7 @@ struct ScanResult {
 }
 
 fn scan_hour_file(path: &Path, start_height: u64) -> ScanResult {
-    println!("scanning {:?} {:?}", path, start_height);
+    info!("Scanning hour block file @ {:?} for height [{:?}]", path, start_height);
     let file = std::fs::File::open(path).expect("Failed to open hour file path");
     let reader = BufReader::new(file);
 
@@ -72,7 +72,6 @@ fn scan_hour_file(path: &Path, start_height: u64) -> ScanResult {
                 }
                 block_number
             }
-            _ => continue, // unknown variant, skip (future‑proof)
         };
         if height >= start_height {
             last_height = last_height.max(height);
@@ -109,42 +108,24 @@ async fn submit_payload<Engine: PayloadTypes + EngineTypes>(
     Ok(submission.latest_valid_hash.unwrap_or_default())
 }
 
-pub fn datetime_from_timestamp(ts_sec: u64) -> OffsetDateTime {
+fn datetime_from_timestamp(ts_sec: u64) -> OffsetDateTime {
     OffsetDateTime::from_unix_timestamp_nanos((ts_sec as i128) * 1_000 * 1_000_000)
         .expect("timestamp out of range")
 }
 
-pub fn date_from_datetime(dt: OffsetDateTime) -> String {
+fn date_from_datetime(dt: OffsetDateTime) -> String {
     dt.format(&format_description::parse("[year][month][day]").unwrap()).unwrap()
 }
 
 impl BlockIngest {
     pub(crate) async fn collect_block(&self, height: u64) -> Option<BlockAndReceipts> {
-        // let s3_block = self.try_collect_s3_block(height);
-        // let local_block = self.try_collect_local_block(height).await;
-        // println!("Local Block {:#?}", local_block);
-        // println!("s3 Block {:#?}", s3_block);
-        // local_block
-        self.try_collect_local_block(height).await.or_else(|| self.try_collect_s3_block(height))
-    }
-
-    fn fetch_local_blocks_directories(&self) -> Vec<std::path::PathBuf> {
-        let mut dirs = Vec::new();
-        // Where hourly block data per day is stored, each directory is a day with files for each
-        // hour of the day
-        let day_data_subdir = self.local_ingest_dir.as_ref().unwrap().join("hourly");
-
-        for entry_result in
-            std::fs::read_dir(day_data_subdir).expect("Local blocks directory does not exist")
-        {
-            let entry = entry_result.unwrap();
-            let file_type = entry.file_type().unwrap();
-
-            if file_type.is_dir() {
-                dirs.push(entry.path());
-            }
+        if let Some(block) = self.try_collect_s3_block(height) {
+            info!("Returning s3 synced block for @ Height [{height}]");
+            Some(block)
+        } else {
+            info!("Returning locally synced block for @ Height [{height}]");
+            self.try_collect_local_block(height).await
         }
-        dirs
     }
 
     pub(crate) fn try_collect_s3_block(&self, height: u64) -> Option<BlockAndReceipts> {
@@ -165,7 +146,6 @@ impl BlockIngest {
     async fn try_collect_local_block(&self, height: u64) -> Option<BlockAndReceipts> {
         let mut u_cache = self.local_blocks_cache.lock().await;
         let block = u_cache.remove(&height);
-        println!("Returning local block {:?}", block.is_some());
         block
     }
 
@@ -195,7 +175,6 @@ impl BlockIngest {
                                     let block_number = b.header().number() as u64;
                                     block_number
                                 }
-                                _ => continue,
                             };
                             u_cache.insert(h, blk);
                         }
