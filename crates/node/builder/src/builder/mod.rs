@@ -754,6 +754,10 @@ impl<Node: FullNodeTypes> BuilderContext<Node> {
     pub fn ingest_dir(&self) -> PathBuf {
         self.config().ingest_dir.clone().expect("ingest dir not set")
     }
+
+    pub fn local_ingest_dir(&self) -> PathBuf {
+        self.config().local_ingest_dir.clone().expect("local ingest dir not set")
+    }
 }
 
 impl<Node: FullNodeTypes<Types: NodeTypes<ChainSpec: Hardforks>>> BuilderContext<Node> {

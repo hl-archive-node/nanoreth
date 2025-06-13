@@ -148,6 +148,9 @@ pub struct NodeConfig<ChainSpec> {
 
     /// The ingest directory for the node.
     pub ingest_dir: Option<PathBuf>,
+
+    /// The local ingest directory for the node.
+    pub local_ingest_dir: Option<PathBuf>,
 }
 
 impl NodeConfig<ChainSpec> {
@@ -178,6 +181,7 @@ impl<ChainSpec> NodeConfig<ChainSpec> {
             datadir: DatadirArgs::default(),
             engine: EngineArgs::default(),
             ingest_dir: None,
+            local_ingest_dir: None,
         }
     }
 
@@ -363,7 +367,7 @@ impl<ChainSpec> NodeConfig<ChainSpec> {
         // try to look up the header in the database
         if let Some(header) = header {
             info!(target: "reth::cli", ?tip, "Successfully looked up tip block in the database");
-            return Ok(header.number())
+            return Ok(header.number());
         }
 
         Ok(self.fetch_tip_from_network(client, tip.into()).await.number())
@@ -386,7 +390,7 @@ impl<ChainSpec> NodeConfig<ChainSpec> {
             match get_single_header(&client, tip).await {
                 Ok(tip_header) => {
                     info!(target: "reth::cli", ?tip, "Successfully fetched tip");
-                    return tip_header
+                    return tip_header;
                 }
                 Err(error) => {
                     fetch_failures += 1;
