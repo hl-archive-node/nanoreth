@@ -118,6 +118,10 @@ pub struct NodeCommand<
     /// EVM blocks base directory
     #[arg(long, default_value = "/tmp/evm-blocks")]
     pub ingest_dir: PathBuf,
+
+    /// Local EVM blocks base directory
+    #[arg(long, default_value = "/tmp/evm-blocks-and-receipts")]
+    pub local_ingest_dir: PathBuf,
 }
 
 impl<C: ChainSpecParser> NodeCommand<C> {
@@ -170,6 +174,7 @@ impl<
             ext,
             engine,
             ingest_dir,
+            local_ingest_dir,
         } = self;
 
         // set up node config
@@ -189,6 +194,7 @@ impl<
             pruning,
             engine,
             ingest_dir: Some(ingest_dir),
+            local_ingest_dir: Some(local_ingest_dir),
         };
 
         let data_dir = node_config.datadir();
