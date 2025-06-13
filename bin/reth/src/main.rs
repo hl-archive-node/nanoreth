@@ -43,7 +43,7 @@ fn main() {
     if let Err(err) = Cli::<EthereumChainSpecParser, HyperliquidExtArgs>::parse().run(
         |builder, ext_args| async move {
             let ingest_dir = builder.config().ingest_dir.clone().expect("ingest dir not set");
-            let local_ingest_dir = ext_args.local_ingest_dir;
+            let local_ingest_dir = builder.config().local_ingest_dir.clone();
             info!(target: "reth::cli", "Launching node");
             let handle = builder
                 .node(EthereumNode::default())
