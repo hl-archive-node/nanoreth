@@ -119,6 +119,7 @@ fn date_from_datetime(dt: OffsetDateTime) -> String {
 
 impl BlockIngest {
     pub(crate) async fn collect_block(&self, height: u64) -> Option<BlockAndReceipts> {
+        info!("Attempting to collect block @ height [{height}]");
         if let Some(block) = self.try_collect_s3_block(height) {
             info!("Returning s3 synced block for @ Height [{height}]");
             Some(block)
