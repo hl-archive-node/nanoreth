@@ -474,6 +474,7 @@ impl<ChainSpec> NodeConfig<ChainSpec> {
             pruning: self.pruning,
             engine: self.engine,
             ingest_dir: self.ingest_dir,
+            local_ingest_dir: self.local_ingest_dir,
         }
     }
 }
@@ -502,6 +503,7 @@ impl<ChainSpec> Clone for NodeConfig<ChainSpec> {
             datadir: self.datadir.clone(),
             engine: self.engine.clone(),
             ingest_dir: self.ingest_dir.clone(),
+            local_ingest_dir: self.local_ingest_dir.clone(),
         }
     }
 }
