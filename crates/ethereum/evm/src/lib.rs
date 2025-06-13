@@ -48,7 +48,7 @@ use reth_revm::{
 use reth_revm::{Context, Inspector, MainContext};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 
 mod config;
@@ -72,17 +72,29 @@ pub struct EthEvmConfig {
     chain_spec: Arc<ChainSpec>,
     evm_factory: HyperliquidEvmFactory,
     ingest_dir: Option<PathBuf>,
+    local_ingest_dir: Option<PathBuf>,
 }
 
 impl EthEvmConfig {
     /// Creates a new Ethereum EVM configuration with the given chain spec.
     pub fn new(chain_spec: Arc<ChainSpec>) -> Self {
-        Self { chain_spec, ingest_dir: None, evm_factory: Default::default() }
+        Self {
+            chain_spec,
+            ingest_dir: None,
+            local_ingest_dir: None,
+            evm_factory: Default::default(),
+        }
     }
 
     pub fn with_ingest_dir(mut self, ingest_dir: PathBuf) -> Self {
         self.ingest_dir = Some(ingest_dir.clone());
         self.evm_factory.ingest_dir = Some(ingest_dir);
+        self
+    }
+
+    pub fn with_local_ingest_dir(mut self, local_ingest_dir: PathBuf) -> Self {
+        self.local_ingest_dir = Some(local_ingest_dir.clone());
+        self.evm_factory.local_ingest_dir = Some(local_ingest_dir);
         self
     }
 
@@ -194,6 +206,7 @@ impl ConfigureEvmEnv for EthEvmConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct BlockAndReceipts {
+    pub block: EvmBlock,
     #[serde(default)]
     pub read_precompile_calls: Vec<(Address, Vec<(ReadPrecompileInput, ReadPrecompileResult)>)>,
 }
@@ -208,9 +221,10 @@ pub(crate) enum EvmBlock {
 #[non_exhaustive]
 pub struct HyperliquidEvmFactory {
     ingest_dir: Option<PathBuf>,
+    local_ingest_dir: Option<PathBuf>,
 }
 
-pub(crate) fn collect_block(ingest_path: PathBuf, height: u64) -> Option<BlockAndReceipts> {
+pub(crate) fn collect_s3_block(ingest_path: PathBuf, height: u64) -> Option<BlockAndReceipts> {
     let f = ((height - 1) / 1_000_000) * 1_000_000;
     let s = ((height - 1) / 1_000) * 1_000;
     let path = format!("{}/{f}/{s}/{height}.rmp.lz4", ingest_path.to_string_lossy());
@@ -225,6 +239,62 @@ pub(crate) fn collect_block(ingest_path: PathBuf, height: u64) -> Option<BlockAn
     }
 }
 
+pub(crate) fn collect_local_block(
+    local_ingest_path: Option<PathBuf>,
+    height: u64,
+) -> Option<BlockAndReceipts> {
+    let Some(root) = local_ingest_path else { return None };
+    let hourly_root = root.join("hourly");
+
+    let mut days = std::fs::read_dir(&hourly_root)
+        .expect("Local Ingest Path does not exist")
+        .filter_map(|e| e.ok())
+        .collect::<Vec<_>>();
+
+    days.sort_by_key(|d| d.file_name());
+
+    for day in days {
+        let mut hours = std::fs::read_dir(day.path())
+            .expect("Day path does not exist.")
+            .filter_map(|e| e.ok())
+            .collect::<Vec<_>>();
+        hours.sort_by_key(|h| h.file_name());
+
+        for hour_entry in hours {
+            let path = hour_entry.path();
+            let file = std::fs::File::open(&path)
+                .expect(&format!("Failed to open {:?}, does it exist?", &path));
+            let reader = BufReader::new(file);
+            for line in reader.lines() {
+                let line = line.expect("Failed to read line from hourly block file.");
+                if line.trim().is_empty() {
+                    continue;
+                }
+                let blk: BlockAndReceipts =
+                    serde_json::from_str(&line).expect("Failed to deserialize local reth block.");
+                if let EvmBlock::Reth115(b) = &blk.block {
+                    if b.header().number() as u64 == height {
+                        return Some(blk);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+pub(crate) fn collect_block(
+    ingest_path: PathBuf,
+    local_ingest_path: Option<PathBuf>,
+    height: u64,
+) -> Option<BlockAndReceipts> {
+    if let Some(block) = collect_s3_block(ingest_path, height) {
+        Some(block)
+    } else {
+        collect_local_block(local_ingest_path, height)
+    }
+}
+
 impl EvmFactory<EvmEnv> for HyperliquidEvmFactory {
     type Evm<DB: Database, I: Inspector<EthEvmContext<DB>, EthInterpreter>> =
         EthEvm<DB, I, ReplayPrecompile<EthEvmContext<DB>>>;
@@ -234,9 +304,13 @@ impl EvmFactory<EvmEnv> for HyperliquidEvmFactory {
     type Context<DB: Database> = EthEvmContext<DB>;
 
     fn create_evm<DB: Database>(&self, db: DB, input: EvmEnv) -> Self::Evm<DB, NoOpInspector> {
-        let cache = collect_block(self.ingest_dir.clone().unwrap(), input.block_env.number)
-            .unwrap()
-            .read_precompile_calls;
+        let cache = collect_block(
+            self.ingest_dir.clone().unwrap(),
+            self.local_ingest_dir.clone(),
+            input.block_env.number,
+        )
+        .unwrap()
+        .read_precompile_calls;
         let evm = Context::mainnet()
             .with_db(db)
             .with_cfg(input.cfg_env)
