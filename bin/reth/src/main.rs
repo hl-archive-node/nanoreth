@@ -30,9 +30,6 @@ struct HyperliquidExtArgs {
     /// Forward eth_call and eth_estimateGas to the upstream RPC.
     #[arg(long)]
     pub forward_call: bool,
-
-    #[arg(long, default_value = "/tmp/evm_block_and_receipts")]
-    pub local_ingest_dir: Option<PathBuf>,
 }
 
 fn main() {
