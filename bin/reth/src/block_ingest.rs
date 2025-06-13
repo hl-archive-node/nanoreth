@@ -239,6 +239,7 @@ impl BlockIngest {
         loop {
             let Some(original_block) = self.collect_block(height).await else {
                 tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                println!("No block found ... Continiuing...");
                 continue;
             };
             println!("Original Block {:?}", original_block);
