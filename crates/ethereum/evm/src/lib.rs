@@ -265,6 +265,7 @@ pub(crate) fn collect_local_block(
             let path = hour_entry.path();
             let file = std::fs::File::open(&path)
                 .expect(&format!("Failed to open {:?}, does it exist?", &path));
+            println!("openned file {:?}", path);
             let reader = BufReader::new(file);
             for line in reader.lines() {
                 let line = line.expect("Failed to read line from hourly block file.");
@@ -274,7 +275,8 @@ pub(crate) fn collect_local_block(
                 let blk: (String, BlockAndReceipts) =
                     serde_json::from_str(&line).expect("Failed to deserialize local reth block.");
                 if let EvmBlock::Reth115(b) = &blk.1.block {
-                    if b.header().number() as u64 == height {
+                    let block_number = b.header().number() as u64;
+                    if block_number == height {
                         return Some(blk.1);
                     }
                 }
