@@ -12,6 +12,7 @@ use alloy_rpc_types::engine::{
 use jsonrpsee::http_client::{transport::HttpBackend, HttpClient};
 use reth::network::PeersHandleProvider;
 use reth_chainspec::{EthChainSpec, EthereumHardforks};
+use reth_hyperliquid_types::PrecompilesCache;
 use reth_node_api::{Block, FullNodeComponents, PayloadTypes};
 use reth_node_builder::EngineTypes;
 use reth_node_builder::NodeTypesWithEngine;
@@ -39,6 +40,7 @@ pub(crate) struct BlockIngest {
     pub ingest_dir: PathBuf,
     pub local_ingest_dir: Option<PathBuf>,
     pub local_blocks_cache: Arc<Mutex<BTreeMap<u64, BlockAndReceipts>>>, // height → block
+    pub precompiles_cache: PrecompilesCache,
 }
 
 #[derive(Deserialize)]

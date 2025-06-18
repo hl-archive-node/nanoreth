@@ -1,4 +1,7 @@
-use alloy_primitives::Bytes;
+use std::{collections::BTreeMap, sync::Arc};
+
+use alloy_primitives::{Address, Bytes};
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Hash)]
@@ -14,3 +17,6 @@ pub enum ReadPrecompileResult {
     Error,
     UnexpectedError,
 }
+
+pub type PrecompilesCache =
+    Arc<Mutex<BTreeMap<u64, Vec<(Address, Vec<(ReadPrecompileInput, ReadPrecompileResult)>)>>>>;

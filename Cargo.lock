@@ -7969,8 +7969,10 @@ version = "1.2.0"
 dependencies = [
  "alloy-primitives",
  "clap",
+ "parking_lot",
  "reth-cli-commands",
  "serde",
+ "tokio",
 ]
 
 [[package]]
@@ -8290,6 +8292,7 @@ dependencies = [
  "reth-evm",
  "reth-exex",
  "reth-fs-util",
+ "reth-hyperliquid-types",
  "reth-invalid-block-hooks",
  "reth-network",
  "reth-network-api",

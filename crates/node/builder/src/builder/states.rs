@@ -13,6 +13,7 @@ use crate::{
     AddOns, FullNode,
 };
 use reth_exex::ExExContext;
+use reth_hyperliquid_types::PrecompilesCache;
 use reth_node_api::{FullNodeComponents, FullNodeTypes, NodeAddOns, NodeTypes};
 use reth_node_core::node_config::NodeConfig;
 use reth_tasks::TaskExecutor;
@@ -47,6 +48,7 @@ impl<T: FullNodeTypes> NodeBuilderWithTypes<T> {
             adapter,
             components_builder,
             add_ons: AddOns { hooks: NodeHooks::default(), exexs: Vec::new(), add_ons: () },
+            shared_state: None,
         }
     }
 }
@@ -146,6 +148,10 @@ impl<T: FullNodeTypes, C: NodeComponents<T>> Clone for NodeAdapter<T, C> {
     }
 }
 
+pub struct BuilderSharedState {
+    precompiles_cache: PrecompilesCache,
+}
+
 /// A fully type configured node builder.
 ///
 /// Supports adding additional addons to the node.
@@ -162,6 +168,8 @@ pub struct NodeBuilderWithComponents<
     pub components_builder: CB,
     /// Additional node extensions.
     pub add_ons: AddOns<NodeAdapter<T, CB::Components>, AO>,
+    /// Shared state
+    pub shared_state: Option<BuilderSharedState>,
 }
 
 impl<T, CB> NodeBuilderWithComponents<T, CB, ()>
@@ -182,6 +190,7 @@ where
             adapter,
             components_builder,
             add_ons: AddOns { hooks: NodeHooks::default(), exexs: Vec::new(), add_ons },
+            shared_state: None,
         }
     }
 }
@@ -293,5 +302,11 @@ where
             add_ons.hooks_mut().set_extend_rpc_modules(hook);
             add_ons
         })
+    }
+
+    /// Add state
+    pub fn add_precompiles_cache(mut self, precompiles_cache: PrecompilesCache) -> Self {
+        self.shared_state = Some(BuilderSharedState { precompiles_cache });
+        self
     }
 }

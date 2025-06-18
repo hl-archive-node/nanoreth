@@ -74,12 +74,6 @@ where
         ctx: &BuilderContext<Node>,
         pool: Pool,
     ) -> eyre::Result<Self::PayloadBuilder> {
-        self.build(
-            EthEvmConfig::new(ctx.chain_spec())
-                .with_ingest_dir(ctx.ingest_dir())
-                .with_local_ingest_dir(ctx.local_ingest_dir()),
-            ctx,
-            pool,
-        )
+        self.build(EthEvmConfig::new(ctx.chain_spec()).with_ingest_dir(ctx.ingest_dir()), ctx, pool)
     }
 }

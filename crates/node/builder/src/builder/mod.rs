@@ -10,12 +10,14 @@ use crate::{
     BlockReaderFor, EngineNodeLauncher, LaunchNode, Node,
 };
 use alloy_eips::eip4844::env_settings::EnvKzgSettings;
+use alloy_primitives::Address;
 use futures::Future;
 use reth_chainspec::{EthChainSpec, EthereumHardforks, Hardforks};
 use reth_cli_util::get_secret_key;
 use reth_db_api::{database::Database, database_metrics::DatabaseMetrics};
 use reth_engine_tree::tree::TreeConfig;
 use reth_exex::ExExContext;
+use reth_hyperliquid_types::PrecompilesCache;
 use reth_network::{
     transactions::TransactionsManagerConfig, NetworkBuilder, NetworkConfig, NetworkConfigBuilder,
     NetworkHandle, NetworkManager, NetworkPrimitives,
@@ -37,7 +39,7 @@ use reth_provider::{
 use reth_tasks::TaskExecutor;
 use reth_transaction_pool::{PoolConfig, PoolTransaction, TransactionPool};
 use secp256k1::SecretKey;
-use std::{path::PathBuf, sync::Arc};
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 use tracing::{info, trace, warn};
 
 pub mod add_ons;
@@ -472,6 +474,14 @@ where
             + 'static,
     {
         Self { builder: self.builder.on_rpc_started(hook), task_executor: self.task_executor }
+    }
+
+    /// Sets the hook that is run to configure the rpc modules.
+    pub fn add_precompile_cache(self, precompile_cache: PrecompilesCache) -> Self {
+        Self {
+            builder: self.builder.add_precompiles_cache(precompile_cache),
+            task_executor: self.task_executor,
+        }
     }
 
     /// Sets the hook that is run to configure the rpc modules.

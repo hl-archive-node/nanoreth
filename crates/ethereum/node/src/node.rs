@@ -248,9 +248,7 @@ where
         ctx: &BuilderContext<Node>,
     ) -> eyre::Result<(Self::EVM, Self::Executor)> {
         let chain_spec = ctx.chain_spec();
-        let evm_config = EthEvmConfig::new(ctx.chain_spec())
-            .with_ingest_dir(ctx.ingest_dir())
-            .with_local_ingest_dir(ctx.local_ingest_dir());
+        let evm_config = EthEvmConfig::new(ctx.chain_spec()).with_ingest_dir(ctx.ingest_dir());
         let strategy_factory = EthExecutionStrategyFactory::new(chain_spec, evm_config.clone());
         let executor = BasicBlockExecutorProvider::new(strategy_factory);
 
