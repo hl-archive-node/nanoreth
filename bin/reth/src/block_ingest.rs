@@ -156,6 +156,7 @@ impl BlockIngest {
         let Some(root) = &self.local_ingest_dir else { return }; // nothing to do
         let root = root.to_owned();
         let cache = self.local_blocks_cache.clone();
+        let precompiles_cache = self.precompiles_cache.clone();
 
         tokio::spawn(async move {
             let mut next_height = current_head;
@@ -172,7 +173,9 @@ impl BlockIngest {
                         scan_hour_file(&hour_file, next_height);
                     if !new_blocks.is_empty() {
                         let mut u_cache = cache.lock().await;
+                        let mut u_pre_cache = precompiles_cache.lock();
                         for blk in new_blocks {
+                            let precompiles = blk.read_precompile_calls.clone();
                             let h = match &blk.block {
                                 EvmBlock::Reth115(b) => {
                                     let block_number = b.header().number() as u64;
@@ -180,6 +183,7 @@ impl BlockIngest {
                                 }
                             };
                             u_cache.insert(h, blk);
+                            u_pre_cache.insert(h, precompiles);
                         }
                         next_height = next_expected_height;
                     }
