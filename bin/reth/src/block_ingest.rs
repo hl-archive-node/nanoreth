@@ -249,18 +249,15 @@ impl BlockIngest {
             };
             let EvmBlock::Reth115(mut block) = original_block.block;
             {
-                info!("Building payload for {height}");
                 debug!(target: "reth::cli", ?block, "Built new payload");
                 let timestamp = block.header().timestamp();
 
                 let block_hash = block.clone().try_recover()?.hash();
-                info!("Recovered hash for {height}");
                 {
                     let BlockBody { transactions, ommers, withdrawals } =
                         std::mem::take(block.body_mut());
                     let mut system_txs = vec![];
 
-                    info!("Applying txs for {height}");
                     for transaction in original_block.system_txs {
                         let TypedTransaction::Legacy(tx) = &transaction.tx else {
                             panic!("Unexpected transaction type");
@@ -338,7 +335,6 @@ impl BlockIngest {
                     .unwrap()
                     .as_millis();
 
-                info!("Final checks {height}, curr timestamp {current_timestamp} prev timestamp {previous_timestamp}");
                 if height % 100 == 0 || current_timestamp - previous_timestamp > 100 {
                     EngineApiClient::<Engine>::fork_choice_updated_v2(
                         &engine_api,
@@ -356,7 +352,6 @@ impl BlockIngest {
                 previous_hash = block_hash;
             }
             height += 1;
-            info!("Next height {height}");
         }
     }
 }
