@@ -251,12 +251,13 @@ pub(crate) fn collect_block(
     height: u64,
 ) -> Option<BlockAndReceipts> {
     if let Some(precompiles_cache) = precompiles_cache {
+        println!("THERE IS PRECOMPILES CACHE");
         if let Some(calls) = collect_local_block(precompiles_cache, height) {
-            println!("Returning local block {height}");
+            println!("ENGINE: Returning local block {height}");
             return Some(BlockAndReceipts { read_precompile_calls: calls });
         }
     }
-    println!("Returning s3 block {height}");
+    println!("ENGINE: Returning s3 block {height}");
     collect_s3_block(ingest_path, height)
 }
 
