@@ -58,9 +58,9 @@ fn scan_hour_file(path: &Path, start_height: u64) -> ScanResult {
 
     let mut new_blocks = Vec::<BlockAndReceipts>::new();
     let mut last_height = start_height;
+    let lines: Vec<String> = reader.lines().collect::<Result<_, _>>().unwrap();
 
-    for line in reader.lines().rev() {
-        let line = line.unwrap();
+    for line in lines.iter().rev() {
         if line.trim().is_empty() {
             continue;
         }
