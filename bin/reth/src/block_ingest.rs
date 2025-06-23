@@ -161,7 +161,13 @@ impl BlockIngest {
 
         tokio::spawn(async move {
             let mut next_height = current_head;
-            let mut dt = datetime_from_timestamp(current_ts);
+            let mut dt = datetime_from_timestamp(current_ts)
+                .replace_minute(0)
+                .unwrap()
+                .replace_second(0)
+                .unwrap()
+                .replace_nanosecond(0)
+                .unwrap();
             let mut hour = dt.hour();
             let mut day_str = date_from_datetime(dt);
 
@@ -194,7 +200,7 @@ impl BlockIngest {
                 // still live. If it’s in the past by ≥ 1 h, move to next hour;
                 // otherwise, keep tailing the same file.
                 let now = OffsetDateTime::now_utc();
-                if dt < now {
+                if dt + Duration::HOUR <= now {
                     dt += Duration::HOUR; // advance sequentially (handles day rollover)
                     hour = dt.hour();
                     day_str = date_from_datetime(dt);
