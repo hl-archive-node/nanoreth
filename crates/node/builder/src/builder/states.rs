@@ -307,6 +307,7 @@ where
 
     /// Add state
     pub fn add_precompiles_cache(mut self, precompiles_cache: PrecompilesCache) -> Self {
+        println!("Added precompiles cache to the builder - Inner, created shared state");
         self.shared_state = Some(BuilderSharedState { precompiles_cache });
         self
     }
