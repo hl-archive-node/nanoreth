@@ -771,6 +771,10 @@ impl<Node: FullNodeTypes> BuilderContext<Node> {
     pub fn local_ingest_dir(&self) -> PathBuf {
         self.config().local_ingest_dir.clone().expect("local ingest dir not set")
     }
+
+    pub fn shared_state(&self) -> Option<BuilderSharedState> {
+        self.shared_state.clone()
+    }
 }
 
 impl<Node: FullNodeTypes<Types: NodeTypes<ChainSpec: Hardforks>>> BuilderContext<Node> {

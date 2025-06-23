@@ -26,6 +26,7 @@ use reth_stages::StageId;
 use serde::Deserialize;
 use time::{format_description, Duration, OffsetDateTime};
 use tokio::sync::Mutex;
+use tokio::task::AbortHandle;
 use tracing::{debug, info};
 
 use crate::serialized::{BlockAndReceipts, EvmBlock};
@@ -152,7 +153,7 @@ impl BlockIngest {
         block
     }
 
-    async fn start_local_ingest_loop(&self, current_head: u64, current_ts: u64) {
+    async fn start_local_ingest_loop(&self, current_head: u64, current_ts: u64) -> AbortHandle {
         let Some(root) = &self.local_ingest_dir else { return }; // nothing to do
         let root = root.to_owned();
         let cache = self.local_blocks_cache.clone();
@@ -202,7 +203,8 @@ impl BlockIngest {
 
                 tokio::time::sleep(TAIL_INTERVAL).await;
             }
-        });
+        })
+        .abort_handle()
     }
 
     pub(crate) async fn run<Node, Engine, AddOns>(
@@ -240,7 +242,7 @@ impl BlockIngest {
             .timestamp();
 
         println!("Current height {height}, timestamp {current_block_timestamp}");
-        self.start_local_ingest_loop(height, current_block_timestamp).await;
+        let _ = self.start_local_ingest_loop(height, current_block_timestamp).await;
 
         loop {
             let Some(original_block) = self.collect_block(height).await else {

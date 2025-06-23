@@ -31,6 +31,7 @@ use reth_chainspec::{ChainSpec, EthChainSpec, MAINNET};
 use reth_evm::Database;
 use reth_evm::{ConfigureEvm, ConfigureEvmEnv, EvmEnv, EvmFactory, NextBlockEnvAttributes};
 use reth_hyperliquid_types::{PrecompilesCache, ReadPrecompileInput, ReadPrecompileResult};
+use reth_node_builder::BuilderSharedState;
 use reth_primitives::TransactionSigned;
 use reth_primitives::{SealedBlock, Transaction};
 use reth_revm::context::result::{EVMError, HaltReason};
@@ -72,18 +73,13 @@ pub struct EthEvmConfig {
     chain_spec: Arc<ChainSpec>,
     evm_factory: HyperliquidEvmFactory,
     ingest_dir: Option<PathBuf>,
-    precompiles_cache: Option<PrecompilesCache>,
+    shared_state: Option<BuilderSharedState>,
 }
 
 impl EthEvmConfig {
     /// Creates a new Ethereum EVM configuration with the given chain spec.
     pub fn new(chain_spec: Arc<ChainSpec>) -> Self {
-        Self {
-            chain_spec,
-            ingest_dir: None,
-            evm_factory: Default::default(),
-            precompiles_cache: None,
-        }
+        Self { chain_spec, ingest_dir: None, evm_factory: Default::default(), shared_state: None }
     }
 
     pub fn with_ingest_dir(mut self, ingest_dir: PathBuf) -> Self {
@@ -92,8 +88,8 @@ impl EthEvmConfig {
         self
     }
 
-    pub fn with_precompiles_cache(mut self, precompiles_cache: PrecompilesCache) -> Self {
-        self.precompiles_cache = Some(precompiles_cache);
+    pub fn with_shared_state(mut self, shared_state: Option<BuilderSharedState>) -> Self {
+        self.shared_state = shared_state;
         self
     }
 

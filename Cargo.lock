@@ -7814,6 +7814,7 @@ dependencies = [
  "reth-evm",
  "reth-execution-types",
  "reth-hyperliquid-types",
+ "reth-node-builder",
  "reth-primitives",
  "reth-primitives-traits",
  "reth-revm",

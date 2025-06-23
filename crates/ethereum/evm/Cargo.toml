@@ -18,6 +18,7 @@ reth-ethereum-forks.workspace = true
 reth-revm.workspace = true
 reth-evm.workspace = true
 reth-primitives.workspace = true
+reth-node-builder.workspace = true
 
 # Ethereum
 reth-primitives-traits.workspace = true
