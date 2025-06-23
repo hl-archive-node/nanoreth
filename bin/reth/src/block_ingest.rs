@@ -52,7 +52,10 @@ struct ScanResult {
 }
 
 fn scan_hour_file(path: &Path, last_line: &mut usize, start_height: u64) -> ScanResult {
-    info!("Scanning hour block file @ {:?} for height [{:?}]", path, start_height);
+    info!(
+        "Scanning hour block file @ {:?} for height [{:?}] | Last Line {:?}",
+        path, start_height, last_line
+    );
     let file = std::fs::File::open(path).expect("Failed to open hour file path");
     let reader = BufReader::new(file);
 
@@ -61,7 +64,7 @@ fn scan_hour_file(path: &Path, last_line: &mut usize, start_height: u64) -> Scan
     let lines: Vec<String> = reader.lines().collect::<Result<_, _>>().unwrap();
 
     for (line_idx, line) in lines.iter().enumerate() {
-        if line_idx <= *last_line {
+        if line_idx < *last_line {
             continue;
         }
         if line.trim().is_empty() {
