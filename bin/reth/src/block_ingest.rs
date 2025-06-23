@@ -26,14 +26,13 @@ use reth_stages::StageId;
 use serde::Deserialize;
 use time::{format_description, Duration, OffsetDateTime};
 use tokio::sync::Mutex;
-use tokio::task::AbortHandle;
 use tracing::{debug, info};
 
 use crate::serialized::{BlockAndReceipts, EvmBlock};
 use crate::spot_meta::erc20_contract_to_spot_token;
 
 /// Poll interval when tailing an *open* hourly file.
-const TAIL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
+const TAIL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
 /// Sub‑directory that contains day folders (inside `local_ingest_dir`).
 const HOURLY_SUBDIR: &str = "hourly";
 
@@ -127,7 +126,6 @@ impl BlockIngest {
             info!("Returning locally synced block for @ Height [{height}]");
             return Some(block);
         } else {
-            info!("Returning s3 synced block for @ Height [{height}]");
             self.try_collect_s3_block(height)
         }
     }
@@ -141,6 +139,7 @@ impl BlockIngest {
             let file = std::io::BufReader::new(file);
             let mut decoder = lz4_flex::frame::FrameDecoder::new(file);
             let blocks: Vec<BlockAndReceipts> = rmp_serde::from_read(&mut decoder).unwrap();
+            info!("Returning s3 synced block for @ Height [{height}]");
             Some(blocks[0].clone())
         } else {
             None
@@ -173,7 +172,6 @@ impl BlockIngest {
 
             loop {
                 let hour_file = root.join("hourly").join(&day_str).join(format!("{hour}"));
-                println!("Hour file {:?}, {}", hour_file, hour_file.exists());
 
                 if hour_file.exists() {
                     let ScanResult { next_expected_height, new_blocks } =
@@ -251,7 +249,7 @@ impl BlockIngest {
 
         loop {
             let Some(original_block) = self.collect_block(height).await else {
-                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                 continue;
             };
             let EvmBlock::Reth115(mut block) = original_block.block;
@@ -309,7 +307,6 @@ impl BlockIngest {
                     *block.body_mut() = BlockBody { transactions: txs, ommers, withdrawals };
                 }
 
-                info!("Submitting payload for {height}");
                 let total_fees = U256::ZERO;
                 let payload = EthBuiltPayload::new(
                     PayloadId::new(height.to_be_bytes()),
@@ -336,7 +333,6 @@ impl BlockIngest {
                 )
                 .await?;
 
-                info!("Submitted payload for {height}");
                 let current_timestamp = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap()
