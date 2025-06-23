@@ -42,6 +42,7 @@ impl<T: FullNodeTypes> NodeBuilderWithTypes<T> {
         CB: NodeComponentsBuilder<T>,
     {
         let Self { config, adapter } = self;
+        println!("ADVANCE STATE COMPONENTS WHERE SHARED STATE IS NHONE");
 
         NodeBuilderWithComponents {
             config,

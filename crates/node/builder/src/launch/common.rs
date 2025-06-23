@@ -668,6 +668,8 @@ where
         // fetch the head block from the database
         let head = self.lookup_head()?;
 
+        println!("Creating builder context {:?}", shared_state.is_some());
+
         let builder_ctx = BuilderContext::new(
             head,
             self.blockchain_db().clone(),
