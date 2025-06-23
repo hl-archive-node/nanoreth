@@ -242,7 +242,7 @@ impl BlockIngest {
             .timestamp();
 
         println!("Current height {height}, timestamp {current_block_timestamp}");
-        let _ = self.start_local_ingest_loop(height, current_block_timestamp).await;
+        self.start_local_ingest_loop(height, current_block_timestamp).await;
 
         loop {
             let Some(original_block) = self.collect_block(height).await else {
