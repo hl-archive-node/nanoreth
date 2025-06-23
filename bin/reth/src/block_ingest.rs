@@ -249,7 +249,7 @@ impl BlockIngest {
 
         loop {
             let Some(original_block) = self.collect_block(height).await else {
-                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
                 continue;
             };
             let EvmBlock::Reth115(mut block) = original_block.block;
