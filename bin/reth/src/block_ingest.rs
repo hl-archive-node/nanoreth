@@ -51,7 +51,7 @@ struct ScanResult {
     new_blocks: Vec<BlockAndReceipts>,
 }
 
-fn scan_hour_file(path: &Path, start_height: u64) -> ScanResult {
+fn scan_hour_file(path: &Path, last_line: &mut usize, start_height: u64) -> ScanResult {
     info!("Scanning hour block file @ {:?} for height [{:?}]", path, start_height);
     let file = std::fs::File::open(path).expect("Failed to open hour file path");
     let reader = BufReader::new(file);
@@ -60,7 +60,10 @@ fn scan_hour_file(path: &Path, start_height: u64) -> ScanResult {
     let mut last_height = start_height;
     let lines: Vec<String> = reader.lines().collect::<Result<_, _>>().unwrap();
 
-    for line in lines.iter().rev() {
+    for (line_idx, line) in lines.iter().enumerate() {
+        if line_idx <= last_line {
+            continue;
+        }
         if line.trim().is_empty() {
             continue;
         }
@@ -78,6 +81,7 @@ fn scan_hour_file(path: &Path, start_height: u64) -> ScanResult {
         if height >= start_height {
             last_height = last_height.max(height);
             new_blocks.push(parsed_block);
+            *last_line = line_idx;
         }
     }
 
@@ -169,13 +173,14 @@ impl BlockIngest {
                 .unwrap();
             let mut hour = dt.hour();
             let mut day_str = date_from_datetime(dt);
+            let mut last_line = 0;
 
             loop {
                 let hour_file = root.join("hourly").join(&day_str).join(format!("{hour}"));
 
                 if hour_file.exists() {
                     let ScanResult { next_expected_height, new_blocks } =
-                        scan_hour_file(&hour_file, next_height);
+                        scan_hour_file(&hour_file, &mut last_line, next_height);
                     if !new_blocks.is_empty() {
                         let mut u_cache = cache.lock().await;
                         let mut u_pre_cache = precompiles_cache.lock();
@@ -202,6 +207,7 @@ impl BlockIngest {
                     dt += Duration::HOUR; // advance sequentially (handles day rollover)
                     hour = dt.hour();
                     day_str = date_from_datetime(dt);
+                    last_line = 0;
                     continue; // immediately inspect the next hour file
                 }
 
