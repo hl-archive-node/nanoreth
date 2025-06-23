@@ -153,7 +153,7 @@ impl BlockIngest {
         block
     }
 
-    async fn start_local_ingest_loop(&self, current_head: u64, current_ts: u64) -> AbortHandle {
+    async fn start_local_ingest_loop(&self, current_head: u64, current_ts: u64) {
         let Some(root) = &self.local_ingest_dir else { return }; // nothing to do
         let root = root.to_owned();
         let cache = self.local_blocks_cache.clone();
@@ -203,8 +203,7 @@ impl BlockIngest {
 
                 tokio::time::sleep(TAIL_INTERVAL).await;
             }
-        })
-        .abort_handle()
+        });
     }
 
     pub(crate) async fn run<Node, Engine, AddOns>(
