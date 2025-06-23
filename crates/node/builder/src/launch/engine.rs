@@ -96,8 +96,6 @@ where
             shared_state,
         } = target;
 
-        println!("INSIDE LAUNCH NODE {:?}", shared_state.is_some());
-
         let NodeHooks { on_component_initialized, on_node_started, .. } = hooks;
 
         // setup the launch context

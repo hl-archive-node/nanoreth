@@ -247,14 +247,11 @@ pub(crate) fn collect_block(
     shared_state: Option<BuilderSharedState>,
     height: u64,
 ) -> Option<BlockAndReceipts> {
-    println!("THERE IS PRECOMPILES CACHE {:?}", shared_state.is_some());
     if let Some(shared_state) = shared_state {
         if let Some(calls) = collect_local_block(shared_state.precompiles_cache, height) {
-            println!("ENGINE: Returning local block {height}");
             return Some(BlockAndReceipts { read_precompile_calls: calls });
         }
     }
-    println!("ENGINE: Returning s3 block {height}");
     collect_s3_block(ingest_path, height)
 }
 

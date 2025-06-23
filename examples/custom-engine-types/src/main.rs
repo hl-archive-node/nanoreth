@@ -240,7 +240,7 @@ where
         if attributes.custom == 0 {
             return Err(EngineObjectValidationError::invalid_params(
                 CustomError::CustomFieldIsNotZero,
-            ))
+            ));
         }
 
         Ok(())
@@ -450,8 +450,6 @@ async fn main() -> eyre::Result<()> {
         .launch_node(MyCustomNode::default())
         .await
         .unwrap();
-
-    println!("Node started");
 
     handle.node_exit_future.await
 }

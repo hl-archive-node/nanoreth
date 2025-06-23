@@ -248,7 +248,6 @@ where
         ctx: &BuilderContext<Node>,
     ) -> eyre::Result<(Self::EVM, Self::Executor)> {
         let chain_spec = ctx.chain_spec();
-        println!("build evm builder context {:?}", ctx.shared_state().is_some());
         let evm_config = EthEvmConfig::new(ctx.chain_spec())
             .with_ingest_dir(ctx.ingest_dir())
             .with_shared_state(ctx.shared_state());

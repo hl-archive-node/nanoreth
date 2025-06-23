@@ -478,7 +478,6 @@ where
 
     /// Add precompiles cache <hyperliquid>
     pub fn add_precompiles_cache(self, precompile_cache: PrecompilesCache) -> Self {
-        println!("Added precompiles cache to the builder");
         Self {
             builder: self.builder.add_precompiles_cache(precompile_cache),
             task_executor: self.task_executor,
