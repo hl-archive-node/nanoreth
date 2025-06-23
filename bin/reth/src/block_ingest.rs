@@ -194,6 +194,9 @@ impl BlockIngest {
                 // still live. If it’s in the past by ≥ 1 h, move to next hour;
                 // otherwise, keep tailing the same file.
                 let now = OffsetDateTime::now_utc();
+                println!("NOW IS {:?}", now);
+                println!("DT IS {:?}", dt);
+                println!("DT +1h {:?}", dt + Duration::HOUR);
                 if dt + Duration::HOUR <= now {
                     dt += Duration::HOUR; // advance sequentially (handles day rollover)
                     hour = dt.hour();
