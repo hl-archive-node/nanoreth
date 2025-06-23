@@ -32,7 +32,7 @@ use crate::serialized::{BlockAndReceipts, EvmBlock};
 use crate::spot_meta::erc20_contract_to_spot_token;
 
 /// Poll interval when tailing an *open* hourly file.
-const TAIL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(25);
+const TAIL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(10);
 /// Sub‑directory that contains day folders (inside `local_ingest_dir`).
 const HOURLY_SUBDIR: &str = "hourly";
 
