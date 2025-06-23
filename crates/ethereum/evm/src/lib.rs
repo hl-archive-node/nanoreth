@@ -250,8 +250,8 @@ pub(crate) fn collect_block(
     precompiles_cache: Option<PrecompilesCache>,
     height: u64,
 ) -> Option<BlockAndReceipts> {
+    println!("THERE IS PRECOMPILES CACHE {:?}");
     if let Some(precompiles_cache) = precompiles_cache {
-        println!("THERE IS PRECOMPILES CACHE");
         if let Some(calls) = collect_local_block(precompiles_cache, height) {
             println!("ENGINE: Returning local block {height}");
             return Some(BlockAndReceipts { read_precompile_calls: calls });
