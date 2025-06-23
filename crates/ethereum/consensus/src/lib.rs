@@ -225,6 +225,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloy_eips::eip1559::GAS_LIMIT_BOUND_DIVISOR;
     use alloy_primitives::B256;
     use reth_chainspec::{ChainSpec, ChainSpecBuilder};
     use reth_primitives_traits::proofs;

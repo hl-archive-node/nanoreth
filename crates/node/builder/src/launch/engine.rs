@@ -93,7 +93,7 @@ where
             components_builder,
             add_ons: AddOns { hooks, exexs: installed_exex, add_ons },
             config,
-            shared_state: _,
+            shared_state,
         } = target;
         let NodeHooks { on_component_initialized, on_node_started, .. } = hooks;
 
@@ -127,7 +127,7 @@ where
             .with_blockchain_db::<T, _>(move |provider_factory| {
                 Ok(BlockchainProvider::new(provider_factory)?)
             })?
-            .with_components(components_builder, on_component_initialized).await?;
+            .with_components(components_builder, on_component_initialized, shared_state.clone()).await?;
 
         // spawn exexs
         let exex_manager_handle = ExExLauncher::new(
