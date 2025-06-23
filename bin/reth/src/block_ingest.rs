@@ -81,6 +81,7 @@ fn scan_hour_file(path: &Path, last_line: &mut usize, start_height: u64) -> Scan
                 block_number
             }
         };
+        println!("Iterating block height {:?}", height);
         if height >= start_height {
             last_height = last_height.max(height);
             new_blocks.push(parsed_block);
