@@ -61,7 +61,7 @@ fn scan_hour_file(path: &Path, last_line: &mut usize, start_height: u64) -> Scan
     let lines: Vec<String> = reader.lines().collect::<Result<_, _>>().unwrap();
 
     for (line_idx, line) in lines.iter().enumerate() {
-        if line_idx <= last_line {
+        if line_idx <= *last_line {
             continue;
         }
         if line.trim().is_empty() {
