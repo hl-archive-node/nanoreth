@@ -74,6 +74,7 @@ where
         ctx: &BuilderContext<Node>,
         pool: Pool,
     ) -> eyre::Result<Self::PayloadBuilder> {
+        println!("build payload builder context {:?}", ctx.shared_state().is_some());
         self.build(
             EthEvmConfig::new(ctx.chain_spec())
                 .with_ingest_dir(ctx.ingest_dir())
