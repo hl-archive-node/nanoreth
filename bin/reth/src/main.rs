@@ -50,7 +50,7 @@ fn main() {
             info!(target: "reth::cli", "Launching node");
             let handle = builder
                 .node(EthereumNode::default())
-                .add_precompile_cache(precompiles_cache.clone())
+                .add_precompiles_cache(precompiles_cache.clone())
                 .extend_rpc_modules(move |ctx| {
                     let upstream_rpc_url = ext_args.upstream_rpc_url;
                     ctx.modules.replace_configured(
