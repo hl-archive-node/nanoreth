@@ -78,8 +78,6 @@ fn scan_hour_file(path: &Path, start_height: u64) -> ScanResult {
         if height >= start_height {
             last_height = last_height.max(height);
             new_blocks.push(parsed_block);
-        } else {
-            break;
         }
     }
 
