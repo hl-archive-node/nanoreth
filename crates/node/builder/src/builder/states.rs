@@ -151,7 +151,7 @@ impl<T: FullNodeTypes, C: NodeComponents<T>> Clone for NodeAdapter<T, C> {
 
 #[derive(Debug, Clone)]
 pub struct BuilderSharedState {
-    precompiles_cache: PrecompilesCache,
+    pub precompiles_cache: PrecompilesCache,
 }
 
 /// A fully type configured node builder.

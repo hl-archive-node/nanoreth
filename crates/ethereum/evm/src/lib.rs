@@ -89,7 +89,8 @@ impl EthEvmConfig {
     }
 
     pub fn with_shared_state(mut self, shared_state: Option<BuilderSharedState>) -> Self {
-        self.shared_state = shared_state;
+        self.shared_state = shared_state.clone();
+        self.evm_factory.shared_state = shared_state;
         self
     }
 
@@ -215,7 +216,7 @@ pub(crate) enum EvmBlock {
 #[non_exhaustive]
 pub struct HyperliquidEvmFactory {
     ingest_dir: Option<PathBuf>,
-    precompiles_cache: Option<PrecompilesCache>,
+    shared_state: Option<BuilderSharedState>,
 }
 
 pub(crate) fn collect_s3_block(ingest_path: PathBuf, height: u64) -> Option<BlockAndReceipts> {
@@ -243,12 +244,12 @@ pub(crate) fn collect_local_block(
 
 pub(crate) fn collect_block(
     ingest_path: PathBuf,
-    precompiles_cache: Option<PrecompilesCache>,
+    shared_state: Option<BuilderSharedState>,
     height: u64,
 ) -> Option<BlockAndReceipts> {
-    println!("THERE IS PRECOMPILES CACHE {:?}", precompiles_cache.is_some());
-    if let Some(precompiles_cache) = precompiles_cache {
-        if let Some(calls) = collect_local_block(precompiles_cache, height) {
+    println!("THERE IS PRECOMPILES CACHE {:?}", shared_state.is_some());
+    if let Some(shared_state) = shared_state {
+        if let Some(calls) = collect_local_block(shared_state.precompiles_cache, height) {
             println!("ENGINE: Returning local block {height}");
             return Some(BlockAndReceipts { read_precompile_calls: calls });
         }
@@ -268,7 +269,7 @@ impl EvmFactory<EvmEnv> for HyperliquidEvmFactory {
     fn create_evm<DB: Database>(&self, db: DB, input: EvmEnv) -> Self::Evm<DB, NoOpInspector> {
         let block = collect_block(
             self.ingest_dir.clone().unwrap(),
-            self.precompiles_cache.clone(),
+            self.shared_state.clone(),
             input.block_env.number,
         )
         .unwrap();
