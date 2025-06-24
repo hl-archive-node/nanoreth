@@ -33,7 +33,7 @@ will not backfill evm blocks.
 ```sh
 # Run your local hl-node (make sure output file buffering is disabled)
 # Make sure evm blocks are being produced inside evm_block_and_receipts
-hl-node run-non-validator --replica-cmds-style recent-actions --serve-eth-rpc --disable-output-file-buffering
+$ hl-node run-non-validator --replica-cmds-style recent-actions --serve-eth-rpc --disable-output-file-buffering
 
 # Fetch EVM blocks (Initial sync)
 $ aws s3 sync s3://hl-mainnet-evm-blocks/ ~/evm-blocks --request-payer requester # one-time
