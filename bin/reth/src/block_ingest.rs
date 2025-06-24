@@ -52,10 +52,10 @@ struct ScanResult {
 }
 
 fn scan_hour_file(path: &Path, last_line: &mut usize, start_height: u64) -> ScanResult {
-    info!(
-        "Scanning hour block file @ {:?} for height [{:?}] | Last Line {:?}",
-        path, start_height, last_line
-    );
+    // info!(
+    //     "Scanning hour block file @ {:?} for height [{:?}] | Last Line {:?}",
+    //     path, start_height, last_line
+    // );
     let file = std::fs::File::open(path).expect("Failed to open hour file path");
     let reader = BufReader::new(file);
 
@@ -81,7 +81,7 @@ fn scan_hour_file(path: &Path, last_line: &mut usize, start_height: u64) -> Scan
                 block_number
             }
         };
-        println!("Iterating block height {:?}", height);
+        // println!("Iterating block height {:?}", height);
         if height >= start_height {
             last_height = last_height.max(height);
             new_blocks.push(parsed_block);
@@ -208,11 +208,11 @@ impl BlockIngest {
                 // otherwise, keep tailing the same file.
                 let now = OffsetDateTime::now_utc();
 
-                println!("Date Current {:?}", dt);
-                println!("Now Current {:?}", now);
+                // println!("Date Current {:?}", dt);
+                // println!("Now Current {:?}", now);
 
                 if dt + Duration::HOUR < now {
-                    println!("Moving to a new file.");
+                    info!("Moving to a new file.");
                     dt += Duration::HOUR; // advance sequentially (handles day rollover)
                     hour = dt.hour();
                     day_str = date_from_datetime(dt);
@@ -259,7 +259,7 @@ impl BlockIngest {
             .into_header()
             .timestamp();
 
-        println!("Current height {height}, timestamp {current_block_timestamp}");
+        info!("Current height {height}, timestamp {current_block_timestamp}");
         self.start_local_ingest_loop(height, current_block_timestamp).await;
 
         loop {
