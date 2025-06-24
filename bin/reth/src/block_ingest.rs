@@ -66,6 +66,7 @@ fn scan_hour_file(path: &Path, last_line: &mut usize, start_height: u64) -> Scan
     println!("skip {skip} last line {last_line}");
 
     for (line_idx, line) in lines.iter().skip(skip).enumerate() {
+        println!("line idx {:?}", line_idx);
         if line_idx < *last_line {
             continue;
         }
