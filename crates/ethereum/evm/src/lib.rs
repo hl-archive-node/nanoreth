@@ -269,7 +269,7 @@ impl EvmFactory<EvmEnv> for HyperliquidEvmFactory {
             self.shared_state.clone(),
             input.block_env.number,
         )
-        .unwrap();
+        .expect("Failed to collect a submitted block. If sourcing locally, make sure your local hl-node is producing blocks.");
         let cache = block.read_precompile_calls;
 
         let evm = Context::mainnet()
