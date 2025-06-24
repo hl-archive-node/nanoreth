@@ -219,11 +219,14 @@ impl BlockIngest {
                 // println!("Now Current {:?}", now);
 
                 if dt + Duration::HOUR < now {
-                    info!("Moving to a new file.");
                     dt += Duration::HOUR;
                     hour = dt.hour();
                     day_str = date_from_datetime(dt);
                     last_line = 0;
+                    info!(
+                        "Moving to a new file. {}",
+                        root.join(HOURLY_SUBDIR).join(&day_str).join(format!("{hour}"))
+                    );
                     continue;
                 }
 
