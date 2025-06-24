@@ -62,7 +62,7 @@ fn scan_hour_file(path: &Path, last_line: &mut usize, start_height: u64) -> Scan
     let mut new_blocks = Vec::<BlockAndReceipts>::new();
     let mut last_height = start_height;
     let lines: Vec<String> = reader.lines().collect::<Result<_, _>>().unwrap();
-    let skip = if last_line == 0 { last_line } else { (last_line.clone()) - 1 };
+    let skip = if last_line == 0 { 0 } else { (last_line.clone()) - 1 };
 
     for (line_idx, line) in lines.iter().skip(skip).enumerate() {
         if line_idx < *last_line {
