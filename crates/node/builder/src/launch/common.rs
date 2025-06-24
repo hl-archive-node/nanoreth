@@ -5,7 +5,7 @@ use std::{sync::Arc, thread::available_parallelism};
 use crate::{
     components::{NodeComponents, NodeComponentsBuilder},
     hooks::OnComponentInitializedHook,
-    BuilderContext, BuilderSharedState, NodeAdapter,
+    BuilderContext, HyperliquidSharedState, NodeAdapter,
 };
 use alloy_primitives::{BlockNumber, B256};
 use eyre::{Context, OptionExt};
@@ -656,7 +656,7 @@ where
         on_component_initialized: Box<
             dyn OnComponentInitializedHook<NodeAdapter<T, CB::Components>>,
         >,
-        shared_state: Option<BuilderSharedState>,
+        shared_state: Option<HyperlHyperliquidSharedState>,
     ) -> eyre::Result<
         LaunchContextWith<
             Attached<WithConfigs<<T::Types as NodeTypes>::ChainSpec>, WithComponents<T, CB>>,

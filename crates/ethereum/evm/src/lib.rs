@@ -31,7 +31,7 @@ use reth_chainspec::{ChainSpec, EthChainSpec, MAINNET};
 use reth_evm::Database;
 use reth_evm::{ConfigureEvm, ConfigureEvmEnv, EvmEnv, EvmFactory, NextBlockEnvAttributes};
 use reth_hyperliquid_types::{PrecompilesCache, ReadPrecompileInput, ReadPrecompileResult};
-use reth_node_builder::BuilderSharedState;
+use reth_node_builder::HyperliquidSharedState;
 use reth_primitives::TransactionSigned;
 use reth_primitives::{SealedBlock, Transaction};
 use reth_revm::context::result::{EVMError, HaltReason};
@@ -73,7 +73,7 @@ pub struct EthEvmConfig {
     chain_spec: Arc<ChainSpec>,
     evm_factory: HyperliquidEvmFactory,
     ingest_dir: Option<PathBuf>,
-    shared_state: Option<BuilderSharedState>,
+    shared_state: Option<HyperliquidSharedState>,
 }
 
 impl EthEvmConfig {
@@ -88,7 +88,7 @@ impl EthEvmConfig {
         self
     }
 
-    pub fn with_shared_state(mut self, shared_state: Option<BuilderSharedState>) -> Self {
+    pub fn with_shared_state(mut self, shared_state: Option<HyperliquidSharedState>) -> Self {
         self.shared_state = shared_state.clone();
         self.evm_factory.shared_state = shared_state;
         self
@@ -216,7 +216,7 @@ pub(crate) enum EvmBlock {
 #[non_exhaustive]
 pub struct HyperliquidEvmFactory {
     ingest_dir: Option<PathBuf>,
-    shared_state: Option<BuilderSharedState>,
+    shared_state: Option<HyperliquidSharedState>,
 }
 
 pub(crate) fn collect_s3_block(ingest_path: PathBuf, height: u64) -> Option<BlockAndReceipts> {
@@ -244,7 +244,7 @@ pub(crate) fn collect_local_block(
 
 pub(crate) fn collect_block(
     ingest_path: PathBuf,
-    shared_state: Option<BuilderSharedState>,
+    shared_state: Option<HyperliquidSharedState>,
     height: u64,
 ) -> Option<BlockAndReceipts> {
     if let Some(shared_state) = shared_state {

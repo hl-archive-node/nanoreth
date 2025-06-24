@@ -42,7 +42,6 @@ impl<T: FullNodeTypes> NodeBuilderWithTypes<T> {
         CB: NodeComponentsBuilder<T>,
     {
         let Self { config, adapter } = self;
-        println!("ADVANCE STATE COMPONENTS WHERE SHARED STATE IS NHONE");
 
         NodeBuilderWithComponents {
             config,
@@ -150,7 +149,7 @@ impl<T: FullNodeTypes, C: NodeComponents<T>> Clone for NodeAdapter<T, C> {
 }
 
 #[derive(Debug, Clone)]
-pub struct BuilderSharedState {
+pub struct HyperliquidSharedState {
     pub precompiles_cache: PrecompilesCache,
 }
 
@@ -171,7 +170,7 @@ pub struct NodeBuilderWithComponents<
     /// Additional node extensions.
     pub add_ons: AddOns<NodeAdapter<T, CB::Components>, AO>,
     /// Shared state
-    pub shared_state: Option<BuilderSharedState>,
+    pub shared_state: Option<HyperliquidSharedState>,
 }
 
 impl<T, CB> NodeBuilderWithComponents<T, CB, ()>
@@ -308,8 +307,7 @@ where
 
     /// Add state
     pub fn add_precompiles_cache(mut self, precompiles_cache: PrecompilesCache) -> Self {
-        println!("Added precompiles cache to the builder - Inner, created shared state");
-        self.shared_state = Some(BuilderSharedState { precompiles_cache });
+        self.shared_state = Some(HyperliquidSharedState { precompiles_cache });
         self
     }
 }

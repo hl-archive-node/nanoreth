@@ -598,7 +598,7 @@ pub struct BuilderContext<Node: FullNodeTypes> {
     /// Config container
     pub(crate) config_container: WithConfigs<<Node::Types as NodeTypes>::ChainSpec>,
     /// Shared state
-    pub(crate) shared_state: Option<BuilderSharedState>,
+    pub(crate) shared_state: Option<HyperliquidSharedState>,
 }
 
 impl<Node: FullNodeTypes> BuilderContext<Node> {
@@ -608,7 +608,7 @@ impl<Node: FullNodeTypes> BuilderContext<Node> {
         provider: Node::Provider,
         executor: TaskExecutor,
         config_container: WithConfigs<<Node::Types as NodeTypes>::ChainSpec>,
-        shared_state: Option<BuilderSharedState>,
+        shared_state: Option<HyperliquidSharedState>,
     ) -> Self {
         Self { head, provider, executor, config_container, shared_state }
     }
@@ -772,7 +772,7 @@ impl<Node: FullNodeTypes> BuilderContext<Node> {
         self.config().local_ingest_dir.clone().expect("local ingest dir not set")
     }
 
-    pub fn shared_state(&self) -> Option<BuilderSharedState> {
+    pub fn shared_state(&self) -> Option<HyperliquidSharedState> {
         self.shared_state.clone()
     }
 }
