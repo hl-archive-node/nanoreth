@@ -63,7 +63,7 @@ fn scan_hour_file(path: &Path, last_line: &mut usize, start_height: u64) -> Scan
     let mut last_height = start_height;
     let lines: Vec<String> = reader.lines().collect::<Result<_, _>>().unwrap();
 
-    for (line_idx, line) in lines.iter().skip(*last_line).enumerate() {
+    for (line_idx, line) in lines.iter().skip(last_line.clone() - 1).enumerate() {
         if line_idx < *last_line {
             continue;
         }
