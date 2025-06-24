@@ -656,7 +656,7 @@ where
         on_component_initialized: Box<
             dyn OnComponentInitializedHook<NodeAdapter<T, CB::Components>>,
         >,
-        shared_state: Option<HyperlHyperliquidSharedState>,
+        shared_state: Option<HyperliquidSharedState>,
     ) -> eyre::Result<
         LaunchContextWith<
             Attached<WithConfigs<<T::Types as NodeTypes>::ChainSpec>, WithComponents<T, CB>>,
