@@ -63,10 +63,8 @@ fn scan_hour_file(path: &Path, last_line: &mut usize, start_height: u64) -> Scan
     let mut last_height = start_height;
     let lines: Vec<String> = reader.lines().collect::<Result<_, _>>().unwrap();
     let skip = if *last_line == 0 { 0 } else { (last_line.clone()) - 1 };
-    println!("skip {skip} last line {last_line}");
 
-    for (line_idx, line) in lines.iter().skip(skip).enumerate() {
-        println!("line idx {:?}", line_idx);
+    for (line_idx, line) in lines.iter().enumerate().skip(skip) {
         if line_idx < *last_line {
             continue;
         }
@@ -84,7 +82,7 @@ fn scan_hour_file(path: &Path, last_line: &mut usize, start_height: u64) -> Scan
                 block_number
             }
         };
-        println!("Iterating block height {:?} | Line {}", height, line_idx);
+        // println!("Iterating block height {:?} | Line {}", height, line_idx);
         if height >= start_height {
             last_height = last_height.max(height);
             new_blocks.push(parsed_block);
