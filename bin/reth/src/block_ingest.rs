@@ -224,7 +224,7 @@ impl BlockIngest {
                     day_str = date_from_datetime(dt);
                     last_line = 0;
                     info!(
-                        "Moving to a new file. {}",
+                        "Moving to a new file. {:?}",
                         root.join(HOURLY_SUBDIR).join(&day_str).join(format!("{hour}"))
                     );
                     continue;
