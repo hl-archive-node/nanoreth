@@ -135,6 +135,8 @@ fn date_from_datetime(dt: OffsetDateTime) -> String {
 impl BlockIngest {
     pub(crate) async fn collect_block(&self, height: u64) -> Option<BlockAndReceipts> {
         // info!("Attempting to collect block @ height [{height}]");
+
+        // Not a one liner (using .or) to include logs
         if let Some(block) = self.try_collect_local_block(height).await {
             info!("Returning locally synced block for @ Height [{height}]");
             return Some(block);
@@ -179,6 +181,7 @@ impl BlockIngest {
                 .unwrap()
                 .replace_nanosecond(0)
                 .unwrap();
+
             let mut hour = dt.hour();
             let mut day_str = date_from_datetime(dt);
             let mut last_line = 0;
@@ -208,7 +211,7 @@ impl BlockIngest {
                 }
 
                 // Decide whether the *current* hour file is closed (past) or
-                // still live. If it’s in the past by ≥ 1 h, move to next hour;
+                // still live. If it’s in the past by > 1 h, move to next hour;
                 // otherwise, keep tailing the same file.
                 let now = OffsetDateTime::now_utc();
 
@@ -217,11 +220,11 @@ impl BlockIngest {
 
                 if dt + Duration::HOUR < now {
                     info!("Moving to a new file.");
-                    dt += Duration::HOUR; // advance sequentially (handles day rollover)
+                    dt += Duration::HOUR;
                     hour = dt.hour();
                     day_str = date_from_datetime(dt);
                     last_line = 0;
-                    continue; // immediately inspect the next hour file
+                    continue;
                 }
 
                 tokio::time::sleep(TAIL_INTERVAL).await;
