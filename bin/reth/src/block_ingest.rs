@@ -65,18 +65,22 @@ fn scan_hour_file(path: &Path, last_line: &mut usize, start_height: u64) -> Scan
     let skip = if *last_line == 0 { 0 } else { (last_line.clone()) - 1 };
 
     for (line_idx, line) in lines.iter().enumerate().skip(skip) {
+        // Safety check ensuring efficiency
         if line_idx < *last_line {
             continue;
         }
         if line.trim().is_empty() {
             continue;
         }
+
         let LocalBlockAndReceipts(_block_timestamp, parsed_block): LocalBlockAndReceipts =
-            serde_json::from_str(&line).unwrap();
+            serde_json::from_str(&line).expect("Failed to parse local block and receipts");
+
         let height = match &parsed_block.block {
             EvmBlock::Reth115(b) => {
                 let block_number = b.header().number() as u64;
-                if block_number < start_height - 2 {
+                // Another check to ensure not returning an older block
+                if block_number < start_height {
                     continue;
                 }
                 block_number
@@ -157,8 +161,7 @@ impl BlockIngest {
 
     async fn try_collect_local_block(&self, height: u64) -> Option<BlockAndReceipts> {
         let mut u_cache = self.local_blocks_cache.lock().await;
-        let block = u_cache.remove(&height);
-        block
+        u_cache.remove(&height)
     }
 
     async fn start_local_ingest_loop(&self, current_head: u64, current_ts: u64) {
@@ -181,7 +184,7 @@ impl BlockIngest {
             let mut last_line = 0;
 
             loop {
-                let hour_file = root.join("hourly").join(&day_str).join(format!("{hour}"));
+                let hour_file = root.join(HOURLY_SUBDIR).join(&day_str).join(format!("{hour}"));
 
                 if hour_file.exists() {
                     let ScanResult { next_expected_height, new_blocks } =

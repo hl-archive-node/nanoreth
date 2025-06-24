@@ -42,6 +42,7 @@ fn main() {
     }
 
     let precompiles_cache = PrecompilesCache::new(parking_lot::Mutex::new(BTreeMap::new()));
+    let local_blocks_cache = Arc::new(Mutex::new(BTreeMap::new()));
 
     if let Err(err) = Cli::<EthereumChainSpecParser, HyperliquidExtArgs>::parse().run(
         |builder, ext_args| async move {
@@ -70,12 +71,8 @@ fn main() {
                 .launch()
                 .await?;
 
-            let ingest = BlockIngest {
-                ingest_dir,
-                local_ingest_dir,
-                local_blocks_cache: Arc::new(Mutex::new(BTreeMap::new())),
-                precompiles_cache,
-            };
+            let ingest =
+                BlockIngest { ingest_dir, local_ingest_dir, local_blocks_cache, precompiles_cache };
             ingest.run(handle.node).await.unwrap();
             handle.node_exit_future.await
         },
