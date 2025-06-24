@@ -21,10 +21,8 @@ use alloc::sync::Arc;
 use alloy_consensus::{BlockHeader, Header};
 use alloy_evm::eth::EthEvmContext;
 pub use alloy_evm::EthEvm;
-use alloy_primitives::bytes::BufMut;
-use alloy_primitives::hex::{FromHex, ToHexExt};
-use alloy_primitives::{Address, B256};
-use alloy_primitives::{Bytes, U256};
+use alloy_primitives::Address;
+use alloy_primitives::U256;
 use core::{convert::Infallible, fmt::Debug};
 use parking_lot::RwLock;
 use reth_chainspec::{ChainSpec, EthChainSpec, MAINNET};
@@ -32,14 +30,12 @@ use reth_evm::Database;
 use reth_evm::{ConfigureEvm, ConfigureEvmEnv, EvmEnv, EvmFactory, NextBlockEnvAttributes};
 use reth_hyperliquid_types::{PrecompilesCache, ReadPrecompileInput, ReadPrecompileResult};
 use reth_node_builder::HyperliquidSharedState;
+use reth_primitives::SealedBlock;
 use reth_primitives::TransactionSigned;
-use reth_primitives::{SealedBlock, Transaction};
 use reth_revm::context::result::{EVMError, HaltReason};
-use reth_revm::context::Cfg;
 use reth_revm::handler::EthPrecompiles;
 use reth_revm::inspector::NoOpInspector;
 use reth_revm::interpreter::interpreter::EthInterpreter;
-use reth_revm::precompile::{PrecompileError, PrecompileErrors, Precompiles};
 use reth_revm::MainBuilder;
 use reth_revm::{
     context::{BlockEnv, CfgEnv, TxEnv},
@@ -49,7 +45,6 @@ use reth_revm::{
 use reth_revm::{Context, Inspector, MainContext};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 
 mod config;
