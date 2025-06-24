@@ -21,6 +21,29 @@ $ reth node --http --http.addr 0.0.0.0 --http.api eth,ots,net,web3 \
     --ws --ws.addr 0.0.0.0 --ws.origins '*' --ws.api eth,ots,net,web3 --ingest-dir ~/evm-blocks --ws.port 8545
 ```
 
+## How to run (mainnet) (with local block sync) 
+
+You can choose to source blocks from your local instance of hl-node instead of relying on an s3 replica.
+This will require you to first have a hl-node outputting blocks prior to running the initial s3 sync,
+the node will prioritise locally produced blocks with a fallback to s3.
+This method will allow you to reduce the need to rely on goofys.
+
+It is recommended that you periodically sync evm-blocks from s3 so you have a fallback in case your hl-node fails, as hl-node
+will not backfill evm blocks.
+```sh
+# Run your local hl-node (make sure output file buffering is disabled)
+# Make sure evm blocks are being produced inside evm_block_and_receipts
+hl-node run-non-validator --replica-cmds-style recent-actions --serve-eth-rpc --disable-output-file-buffering
+
+# Fetch EVM blocks (Initial sync)
+$ aws s3 sync s3://hl-mainnet-evm-blocks/ ~/evm-blocks --request-payer requester # one-time
+
+# Run node (with local-ingest-dir arg)
+$ make install
+$ reth node --http --http.addr 0.0.0.0 --http.api eth,ots,net,web3 \
+    --ws --ws.addr 0.0.0.0 --ws.origins '*' --ws.api eth,ots,net,web3 --ingest-dir ~/evm-blocks --local-ingest-dir <path-to-your-hl-node-evm-blocks-dir> --ws.port 8545
+```
+
 ## How to run (testnet)
 
 Testnet is supported since block 21304281.
