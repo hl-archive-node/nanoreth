@@ -229,7 +229,7 @@ pub(crate) fn collect_s3_block(ingest_path: PathBuf, height: u64) -> Option<Bloc
     }
 }
 
-pub(crate) fn collect_local_block(
+pub(crate) fn get_locally_sourced_precompiles_for_height(
     precompiles_cache: PrecompilesCache,
     height: u64,
 ) -> Option<Vec<(Address, Vec<(ReadPrecompileInput, ReadPrecompileResult)>)>> {
@@ -242,11 +242,16 @@ pub(crate) fn collect_block(
     shared_state: Option<HyperliquidSharedState>,
     height: u64,
 ) -> Option<BlockAndReceipts> {
+    // Attempt to source precompile from the cache that is shared the binary level with the block
+    // ingestor.
     if let Some(shared_state) = shared_state {
-        if let Some(calls) = collect_local_block(shared_state.precompiles_cache, height) {
+        if let Some(calls) =
+            get_locally_sourced_precompiles_for_height(shared_state.precompiles_cache, height)
+        {
             return Some(BlockAndReceipts { read_precompile_calls: calls });
         }
     }
+    // Fallback to s3 always
     collect_s3_block(ingest_path, height)
 }
 
