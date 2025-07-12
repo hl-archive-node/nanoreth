@@ -8,7 +8,7 @@ use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use alloy_consensus::{Header, Transaction};
 use alloy_eips::{eip4895::Withdrawals, eip6110, eip7685::Requests};
 use alloy_evm::FromRecoveredTx;
-use alloy_primitives::{address, hex, Address, B256};
+use alloy_primitives::{address, b256, hex, Address, B256};
 use reth_chainspec::{ChainSpec, EthereumHardfork, EthereumHardforks, MAINNET};
 use reth_evm::{
     execute::{
@@ -252,7 +252,7 @@ where
 
         // hotfix for https://purrsec.com/tx/0xba3e0422720a7f9ac6ae0fee5097e7c5d46090c55d576f32da02f033117041f8
         // hl-node returns 22_768 gas used
-        if *tx.tx_hash() == TxHash::from_str("0xba3e0422720a7f9ac6ae0fee5097e7c5d46090c55d576f32da02f033117041f8").unwrap() {
+        if *tx.tx_hash() == b256!("0xba3e0422720a7f9ac6ae0fee5097e7c5d46090c55d576f32da02f033117041f8") {
             self.gas_used = 22_768;
         }
 
