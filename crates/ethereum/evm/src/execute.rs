@@ -23,7 +23,7 @@ use reth_execution_types::BlockExecutionResult;
 use reth_primitives::{
     EthPrimitives, Receipt, Recovered, RecoveredBlock, SealedBlock, TransactionSigned,
 };
-use reth_primitives_traits::{transaction::signed::is_impersonated_tx, NodePrimitives};
+use reth_primitives_traits::{transaction::signed::is_impersonated_tx, NodePrimitives, SignedTransaction};
 use reth_revm::{
     context_interface::result::ResultAndState, db::State, state::Bytecode, DatabaseCommit,
 };
@@ -248,6 +248,12 @@ where
         // append gas used
         if !is_system_transaction {
             self.gas_used += gas_used;
+        }
+
+        // hotfix for https://purrsec.com/tx/0xba3e0422720a7f9ac6ae0fee5097e7c5d46090c55d576f32da02f033117041f8
+        // hl-node returns 22_768 gas used
+        if *tx.tx_hash() == TxHash::from_str("0xba3e0422720a7f9ac6ae0fee5097e7c5d46090c55d576f32da02f033117041f8").unwrap() {
+            self.gas_used = 22_768;
         }
 
         // Push transaction changeset and calculate header bloom filter for receipt.
