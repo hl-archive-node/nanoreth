@@ -15,6 +15,13 @@ pre-build = [
     "apt-get update && apt-get install --assume-yes --no-install-recommends llvm-dev libclang-dev clang",
 ]
 
+# Use specific Docker images for Linux targets to avoid GLIBC compatibility issues
+[target.x86_64-unknown-linux-gnu]
+image = "ghcr.io/cross-rs/x86_64-unknown-linux-gnu:0.2.5"
+
+[target.aarch64-unknown-linux-gnu]
+image = "ghcr.io/cross-rs/aarch64-unknown-linux-gnu:0.2.5"
+
 [target.x86_64-pc-windows-gnu]
 # Why do we need a custom Dockerfile on Windows:
 # 1. `reth-libmdbx` stopped working with MinGW 9.3 that cross image comes with.

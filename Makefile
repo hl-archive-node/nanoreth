@@ -236,6 +236,7 @@ build-x86_64-pc-windows-gnu: FEATURES := $(filter-out jemalloc jemalloc-prof,$(F
 build-%:
 	RUSTFLAGS="-C link-arg=-lgcc -Clink-arg=-static-libgcc" \
 		cross build --bin reth-hl --target $* --features "$(FEATURES)" --profile "$(PROFILE)"
+
 ##@ Docker
 
 # Note: This requires a buildx builder with emulation support. For example:
