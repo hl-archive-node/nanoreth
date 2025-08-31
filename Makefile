@@ -17,6 +17,9 @@ PROFILE ?= release
 # Extra flags for Cargo
 CARGO_INSTALL_EXTRA_FLAGS ?=
 
+# The docker image name
+DOCKER_IMAGE_NAME ?= ghcr.io/hl-archive-node/nanoreth
+
 ##@ Help
 
 .PHONY: help
