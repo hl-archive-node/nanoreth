@@ -2,7 +2,7 @@
 .DEFAULT_GOAL := help
 
 GIT_SHA ?= $(shell git rev-parse HEAD)
-GIT_TAG ?= $(shell git describe --tags --abbrev=0 2>/dev/null || echo "latest")
+GIT_TAG ?= $(shell git describe --tags --abbrev=0 2>/dev/null)
 BIN_DIR = "dist/bin"
 
 # List of features to use when building. Can be overridden via the environment.
@@ -253,9 +253,9 @@ define docker_build_push
 		--platform linux/amd64 \
 		--tag $(DOCKER_IMAGE_NAME):$(1) \
 		--tag $(DOCKER_IMAGE_NAME):$(2) \
-		--build-arg BUILD_PROFILE=$(PROFILE) \
-		--build-arg FEATURES=$(FEATURES) \
-		--build-arg RUSTFLAGS=-C target-cpu=native \
+		--build-arg BUILD_PROFILE="$(PROFILE)" \
+		--build-arg FEATURES="$(FEATURES)" \
+		--build-arg RUSTFLAGS="-C target-cpu=native" \
 		--provenance=false \
 		--push
 endef
