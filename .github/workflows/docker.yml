@@ -32,7 +32,7 @@ jobs:
        - name: Install cross main
          id: cross_main
          run: |
-           cargo install cross --git https://github.com/cross-rs/cross v0.2.5
+           cargo install cross --git https://github.com/cross-rs/cross --force v0.2.5
        - name: Log in to Docker
          run: |
            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io --username ${DOCKER_USERNAME} --password-stdin
