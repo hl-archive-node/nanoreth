@@ -245,13 +245,13 @@ docker-build-push-nightly: ## Build and push cross-arch Docker image tagged with
 
 # Create a cross-arch Docker image with the given tags and push it
 define docker_build_push
-	$(MAKE) build-x86_64-unknown-linux-gnu
+	$(MAKE) build
 	mkdir -p $(BIN_DIR)/amd64
-	cp $(CARGO_TARGET_DIR)/x86_64-unknown-linux-gnu/$(PROFILE)/reth $(BIN_DIR)/amd64/reth
+	cp $(CARGO_TARGET_DIR)/x86_64-unknown-linux-gnu/$(PROFILE)/reth-hl $(BIN_DIR)/amd64/reth-hl
 
-	$(MAKE) build-aarch64-unknown-linux-gnu
+	$(MAKE) build
 	mkdir -p $(BIN_DIR)/arm64
-	cp $(CARGO_TARGET_DIR)/aarch64-unknown-linux-gnu/$(PROFILE)/reth $(BIN_DIR)/arm64/reth
+	cp $(CARGO_TARGET_DIR)/aarch64-unknown-linux-gnu/$(PROFILE)/reth-hl $(BIN_DIR)/arm64/reth-hl
 
 	docker buildx build --file ./Dockerfile.cross . \
 		--platform linux/amd64,linux/arm64 \
