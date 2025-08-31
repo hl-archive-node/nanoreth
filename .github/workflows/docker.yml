@@ -29,16 +29,11 @@ jobs:
        - uses: Swatinem/rust-cache@v2
          with:
            cache-on-failure: true
-       - name: Install cross main
-         id: cross_main
-         run: |
-           cargo install cross --git https://github.com/cross-rs/cross
        - name: Log in to Docker
          run: |
            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io --username ${DOCKER_USERNAME} --password-stdin
        - name: Set up Docker builder
          run: |
-           docker run --privileged --rm tonistiigi/binfmt --install arm64,amd64
-           docker buildx create --use --name cross-builder
+           docker buildx create --use --name builder
        - name: Build and push nanoreth image
          run: make IMAGE_NAME=$IMAGE_NAME DOCKER_IMAGE_NAME=$DOCKER_IMAGE_NAME PROFILE=maxperf docker-build-push-latest
