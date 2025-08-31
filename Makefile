@@ -2,7 +2,7 @@
 .DEFAULT_GOAL := help
 
 GIT_SHA ?= $(shell git rev-parse HEAD)
-GIT_TAG ?= $(shell git describe --tags --abbrev=0)
+GIT_TAG ?= $(shell git describe --tags --abbrev=0 2>/dev/null || echo "latest")
 BIN_DIR = "dist/bin"
 
 # List of features to use when building. Can be overridden via the environment.
