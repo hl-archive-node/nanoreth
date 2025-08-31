@@ -6,6 +6,9 @@ FROM --platform=$TARGETPLATFORM ubuntu:22.04
 LABEL org.opencontainers.image.source=https://github.com/hl-archive-node/nanoreth
 LABEL org.opencontainers.image.licenses="MIT OR Apache-2.0"
 
+# Install root certificates for aws sdk to work
+RUN apt-get update && apt-get install -y ca-certificates && update-ca-certificates
+
 # Filled by docker buildx
 ARG TARGETARCH
 
