@@ -36,3 +36,11 @@ env.passthrough = [
 
 [build.env]
 passthrough = ["JEMALLOC_SYS_WITH_LG_PAGE"]
+
+# Use specific Docker images for Linux targets to avoid GLIBC compatibility issues
+# TODO remove this when cross has more stable release
+[target.x86_64-unknown-linux-gnu]
+image = "ghcr.io/cross-rs/x86_64-unknown-linux-gnu:0.2.5"
+
+[target.aarch64-unknown-linux-gnu]
+image = "ghcr.io/cross-rs/aarch64-unknown-linux-gnu:0.2.5"
