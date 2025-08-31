@@ -208,7 +208,31 @@ check-features:
 		--package reth-primitives \
 		--feature-powerset
 
+# The following commands use `cross` to build a cross-compile.
+#
+# These commands require that:
+#
+# - `cross` is installed (`cargo install cross`).
+# - Docker is running.
+# - The current user is in the `docker` group.
+#
+# The resulting binaries will be created in the `target/` directory.
 
+# For aarch64, set the page size for jemalloc.
+# When cross compiling, we must compile jemalloc with a large page size,
+# otherwise it will use the current system's page size which may not work
+# on other systems. JEMALLOC_SYS_WITH_LG_PAGE=16 tells jemalloc to use 64-KiB
+# pages. See: https://github.com/paradigmxyz/reth/issues/6742
+build-aarch64-unknown-linux-gnu: export JEMALLOC_SYS_WITH_LG_PAGE=16
+
+# No jemalloc on Windows
+build-x86_64-pc-windows-gnu: FEATURES := $(filter-out jemalloc jemalloc-prof,$(FEATURES))
+
+# Note: The additional rustc compiler flags are for intrinsics needed by MDBX.
+# See: https://github.com/cross-rs/cross/wiki/FAQ#undefined-reference-with-build-std
+build-%:
+	RUSTFLAGS="-C link-arg=-lgcc -Clink-arg=-static-libgcc" \
+		cross build --bin reth --target $* --features "$(FEATURES)" --profile "$(PROFILE)"
 ##@ Docker
 
 # Note: This requires a buildx builder with emulation support. For example:
@@ -245,11 +269,11 @@ docker-build-push-nightly: ## Build and push cross-arch Docker image tagged with
 
 # Create a cross-arch Docker image with the given tags and push it
 define docker_build_push
-	$(MAKE) build
+	$(MAKE) build-x86_64-unknown-linux-gnu
 	mkdir -p $(BIN_DIR)/amd64
 	cp $(CARGO_TARGET_DIR)/x86_64-unknown-linux-gnu/$(PROFILE)/reth-hl $(BIN_DIR)/amd64/reth-hl
 
-	$(MAKE) build
+	$(MAKE) build-aarch64-unknown-linux-gnu
 	mkdir -p $(BIN_DIR)/arm64
 	cp $(CARGO_TARGET_DIR)/aarch64-unknown-linux-gnu/$(PROFILE)/reth-hl $(BIN_DIR)/arm64/reth-hl
 
