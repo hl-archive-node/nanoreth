@@ -254,6 +254,8 @@ define docker_build_push
 		--tag $(DOCKER_IMAGE_NAME):$(1) \
 		--tag $(DOCKER_IMAGE_NAME):$(2) \
 		--build-arg BUILD_PROFILE="$(PROFILE)" \
+		--build-arg FEATURES="$(FEATURES)" \
+		--build-arg RUSTFLAGS="-C target-cpu=native" \
 		--provenance=false \
 		--push
 endef
