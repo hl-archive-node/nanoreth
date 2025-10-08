@@ -1,11 +1,9 @@
-use std::time::Duration;
-
 use crate::node::rpc::{HlEthApi, HlRpcNodeCore};
-use alloy_primitives::{B256, Bytes};
+use alloy_primitives::{Bytes, B256};
 use reth::rpc::server_types::eth::EthApiError;
 use reth_rpc_eth_api::{
+    helpers::{spec::SignersForRpc, EthTransactions, LoadTransaction},
     RpcConvert,
-    helpers::{EthTransactions, LoadTransaction, spec::SignersForRpc},
 };
 
 impl<N, Rpc> LoadTransaction for HlEthApi<N, Rpc>
@@ -26,9 +24,5 @@ where
 
     async fn send_raw_transaction(&self, _tx: Bytes) -> Result<B256, Self::Error> {
         unreachable!()
-    }
-
-    fn send_raw_transaction_sync_timeout(&self) -> Duration {
-        self.inner.eth_api.send_raw_transaction_sync_timeout()
     }
 }

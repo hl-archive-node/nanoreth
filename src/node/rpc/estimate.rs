@@ -1,5 +1,5 @@
-use super::{HlEthApi, HlRpcNodeCore, apply_precompiles};
-use alloy_evm::overrides::{StateOverrideError, apply_state_overrides};
+use super::{apply_precompiles, HlEthApi, HlRpcNodeCore};
+use alloy_evm::overrides::{apply_state_overrides, StateOverrideError};
 use alloy_network::TransactionBuilder;
 use alloy_primitives::{TxKind, U256};
 use alloy_rpc_types_eth::state::StateOverride;
@@ -9,19 +9,19 @@ use reth_evm::{ConfigureEvm, Evm, EvmEnvFor, SpecFor, TransactionEnv, TxEnvFor};
 use reth_revm::{database::StateProviderDatabase, db::CacheDB};
 use reth_rpc_convert::{RpcConvert, RpcTxReq};
 use reth_rpc_eth_api::{
-    AsEthApiError, IntoEthApiError, RpcNodeCore,
     helpers::{
+        estimate::{update_estimated_gas_range, EstimateCall},
         Call,
-        estimate::{EstimateCall, update_estimated_gas_range},
     },
+    AsEthApiError, IntoEthApiError, RpcNodeCore,
 };
 use reth_rpc_eth_types::{
+    error::{api::FromEvmHalt, FromEvmError},
     EthApiError, RevertError, RpcInvalidTransactionError,
-    error::{FromEvmError, api::FromEvmHalt},
 };
 use reth_rpc_server_types::constants::gas_oracle::{CALL_STIPEND_GAS, ESTIMATE_GAS_ERROR_RATIO};
 use reth_storage_api::StateProvider;
-use revm::context_interface::{Transaction, result::ExecutionResult};
+use revm::context_interface::{result::ExecutionResult, Transaction};
 use tracing::trace;
 
 impl<N, Rpc> EstimateCall for HlEthApi<N, Rpc>
@@ -30,11 +30,11 @@ where
     N: HlRpcNodeCore,
     EthApiError: FromEvmError<N::Evm> + From<StateOverrideError<ProviderError>>,
     Rpc: RpcConvert<
-            Primitives = N::Primitives,
-            Error = EthApiError,
-            TxEnv = TxEnvFor<N::Evm>,
-            Spec = SpecFor<N::Evm>,
-        >,
+        Primitives = N::Primitives,
+        Error = EthApiError,
+        TxEnv = TxEnvFor<N::Evm>,
+        Spec = SpecFor<N::Evm>,
+    >,
 {
     // Modified version that adds `apply_precompiles`; comments are stripped out.
     fn estimate_gas_with<S>(
@@ -82,11 +82,12 @@ where
         let mut tx_env = self.create_txn_env(&evm_env, request, &mut db)?;
 
         let mut is_basic_transfer = false;
-        if tx_env.input().is_empty() &&
-            let TxKind::Call(to) = tx_env.kind() &&
-            let Ok(code) = db.db.account_code(&to)
-        {
-            is_basic_transfer = code.map(|code| code.is_empty()).unwrap_or(true);
+        if tx_env.input().is_empty() {
+            if let TxKind::Call(to) = tx_env.kind() {
+                if let Ok(code) = db.db.account_code(&to) {
+                    is_basic_transfer = code.map(|code| code.is_empty()).unwrap_or(true);
+                }
+            }
         }
 
         if tx_env.gas_price() > 0 {
@@ -106,10 +107,10 @@ where
             let mut min_tx_env = tx_env.clone();
             min_tx_env.set_gas_limit(MIN_TRANSACTION_GAS);
 
-            if let Ok(res) = evm.transact(min_tx_env).map_err(Self::Error::from_evm_err) &&
-                res.result.is_success()
-            {
-                return Ok(U256::from(MIN_TRANSACTION_GAS));
+            if let Ok(res) = evm.transact(min_tx_env).map_err(Self::Error::from_evm_err) {
+                if res.result.is_success() {
+                    return Ok(U256::from(MIN_TRANSACTION_GAS));
+                }
             }
         }
 

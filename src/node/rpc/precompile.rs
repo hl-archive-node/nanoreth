@@ -1,6 +1,6 @@
 use alloy_eips::BlockId;
 use jsonrpsee::proc_macros::rpc;
-use jsonrpsee_core::{RpcResult, async_trait};
+use jsonrpsee_core::{async_trait, RpcResult};
 use reth_rpc_convert::RpcConvert;
 use reth_rpc_eth_types::EthApiError;
 use tracing::trace;

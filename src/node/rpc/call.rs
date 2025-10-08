@@ -1,19 +1,19 @@
 use core::fmt;
 
 use super::{HlEthApi, HlRpcNodeCore};
-use crate::{HlBlock, node::evm::apply_precompiles};
-use alloy_consensus::transaction::TxHashRef;
+use crate::{node::evm::apply_precompiles, HlBlock};
 use alloy_evm::Evm;
 use alloy_primitives::B256;
 use reth::rpc::server_types::eth::EthApiError;
 use reth_evm::{ConfigureEvm, Database, EvmEnvFor, HaltReasonFor, InspectorFor, SpecFor, TxEnvFor};
 use reth_primitives::{NodePrimitives, Recovered};
+use reth_primitives_traits::SignedTransaction;
 use reth_provider::{ProviderError, ProviderTx};
 use reth_rpc_eth_api::{
-    FromEvmError, RpcConvert, RpcNodeCore,
     helpers::{Call, EthCall},
+    FromEvmError, RpcConvert, RpcNodeCore,
 };
-use revm::{DatabaseCommit, context::result::ResultAndState};
+use revm::{context::result::ResultAndState, DatabaseCommit};
 
 impl<N> HlRpcNodeCore for N where N: RpcNodeCore<Primitives: NodePrimitives<Block = HlBlock>> {}
 
@@ -22,11 +22,11 @@ where
     N: HlRpcNodeCore,
     EthApiError: FromEvmError<N::Evm>,
     Rpc: RpcConvert<
-            Primitives = N::Primitives,
-            Error = EthApiError,
-            TxEnv = TxEnvFor<N::Evm>,
-            Spec = SpecFor<N::Evm>,
-        >,
+        Primitives = N::Primitives,
+        Error = EthApiError,
+        TxEnv = TxEnvFor<N::Evm>,
+        Spec = SpecFor<N::Evm>,
+    >,
 {
 }
 
@@ -35,11 +35,11 @@ where
     N: HlRpcNodeCore,
     EthApiError: FromEvmError<N::Evm>,
     Rpc: RpcConvert<
-            Primitives = N::Primitives,
-            Error = EthApiError,
-            TxEnv = TxEnvFor<N::Evm>,
-            Spec = SpecFor<N::Evm>,
-        >,
+        Primitives = N::Primitives,
+        Error = EthApiError,
+        TxEnv = TxEnvFor<N::Evm>,
+        Spec = SpecFor<N::Evm>,
+    >,
 {
     #[inline]
     fn call_gas_limit(&self) -> u64 {

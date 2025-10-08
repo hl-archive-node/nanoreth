@@ -1,6 +1,6 @@
 use crate::{
     evm::{
-        api::{HlEvmInner, ctx::HlContext},
+        api::{ctx::HlContext, HlEvmInner},
         spec::HlSpecId,
         transaction::HlTxEnv,
     },
@@ -10,18 +10,18 @@ use alloy_primitives::{Address, Bytes};
 use config::HlEvmConfig;
 use reth::{
     api::FullNodeTypes,
-    builder::{BuilderContext, components::ExecutorBuilder},
+    builder::{components::ExecutorBuilder, BuilderContext},
 };
 use reth_evm::{Database, Evm, EvmEnv};
 use revm::{
-    Context, ExecuteEvm, InspectEvm, Inspector,
     context::{
-        BlockEnv, TxEnv,
         result::{EVMError, ExecutionResult, HaltReason, Output, ResultAndState, SuccessReason},
+        BlockEnv, TxEnv,
     },
-    handler::{EthPrecompiles, PrecompileProvider, instructions::EthInstructions},
-    interpreter::{InterpreterResult, interpreter::EthInterpreter},
+    handler::{instructions::EthInstructions, EthPrecompiles, PrecompileProvider},
+    interpreter::{interpreter::EthInterpreter, InterpreterResult},
     state::EvmState,
+    Context, ExecuteEvm, InspectEvm, Inspector,
 };
 use std::ops::{Deref, DerefMut};
 
@@ -98,7 +98,11 @@ where
         &mut self,
         tx: Self::Tx,
     ) -> Result<ResultAndState<Self::HaltReason>, Self::Error> {
-        if self.inspect { self.inner.inspect_tx(tx) } else { self.inner.transact(tx) }
+        if self.inspect {
+            self.inner.inspect_tx(tx)
+        } else {
+            self.inner.transact(tx)
+        }
     }
 
     fn transact_system_call(

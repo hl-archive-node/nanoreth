@@ -1,8 +1,8 @@
 use super::service::{BlockHashCache, BlockPoller};
-use crate::{HlPrimitives, chainspec::HlChainSpec, node::network::HlNetworkPrimitives};
+use crate::{chainspec::HlChainSpec, node::network::HlNetworkPrimitives, HlPrimitives};
 use reth_network::{
+    config::{rng_secret_key, SecretKey},
     NetworkConfig, NetworkManager, PeersConfig,
-    config::{SecretKey, rng_secret_key},
 };
 use reth_network_peers::TrustedPeer;
 use reth_provider::test_utils::NoopProvider;

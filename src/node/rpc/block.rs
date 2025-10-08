@@ -1,12 +1,12 @@
 use crate::node::rpc::{HlEthApi, HlRpcNodeCore};
 use reth::rpc::server_types::eth::{
-    EthApiError, PendingBlock, builder::config::PendingBlockKind, error::FromEvmError,
+    builder::config::PendingBlockKind, error::FromEvmError, EthApiError, PendingBlock,
 };
 use reth_rpc_eth_api::{
-    RpcConvert,
     helpers::{
-        EthBlocks, LoadBlock, LoadPendingBlock, LoadReceipt, pending_block::PendingEnvBuilder,
+        pending_block::PendingEnvBuilder, EthBlocks, LoadBlock, LoadPendingBlock, LoadReceipt,
     },
+    RpcConvert,
 };
 
 impl<N, Rpc> EthBlocks for HlEthApi<N, Rpc>
@@ -29,7 +29,7 @@ impl<N, Rpc> LoadPendingBlock for HlEthApi<N, Rpc>
 where
     N: HlRpcNodeCore,
     EthApiError: FromEvmError<N::Evm>,
-    Rpc: RpcConvert<Primitives = N::Primitives>,
+    Rpc: RpcConvert<Primitives = N::Primitives, Error = EthApiError>,
 {
     #[inline]
     fn pending_block(&self) -> &tokio::sync::Mutex<Option<PendingBlock<N::Primitives>>> {
@@ -50,6 +50,7 @@ where
 impl<N, Rpc> LoadReceipt for HlEthApi<N, Rpc>
 where
     N: HlRpcNodeCore,
+    EthApiError: FromEvmError<N::Evm>,
     Rpc: RpcConvert<Primitives = N::Primitives, Error = EthApiError>,
 {
 }

@@ -6,12 +6,12 @@
 //! Ethereum transaction pool only supports TransactionSigned (EthereumTxEnvelope<TxEip4844>),
 //! hence this placeholder for the transaction pool.
 
-use crate::node::{HlNode, primitives::TransactionSigned};
+use crate::node::{primitives::TransactionSigned, HlNode};
 use alloy_consensus::{
-    EthereumTxEnvelope, Transaction as TransactionTrait, TxEip4844, error::ValueError,
+    error::ValueError, EthereumTxEnvelope, Transaction as TransactionTrait, TxEip4844,
 };
-use alloy_eips::{Typed2718, eip7702::SignedAuthorization};
-use alloy_primitives::{Address, B256, Bytes, ChainId, TxHash, TxKind, U256};
+use alloy_eips::{eip7702::SignedAuthorization, Typed2718};
+use alloy_primitives::{Address, Bytes, ChainId, TxHash, TxKind, B256, U256};
 use alloy_rpc_types::AccessList;
 use reth::{
     api::FullNodeTypes, builder::components::PoolBuilder, transaction_pool::PoolTransaction,
@@ -19,7 +19,7 @@ use reth::{
 use reth_ethereum_primitives::PooledTransactionVariant;
 use reth_primitives::Recovered;
 use reth_primitives_traits::InMemorySize;
-use reth_transaction_pool::{EthPoolTransaction, noop::NoopTransactionPool};
+use reth_transaction_pool::{noop::NoopTransactionPool, EthPoolTransaction};
 use std::sync::Arc;
 
 pub struct HlPoolBuilder;

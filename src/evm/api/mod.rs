@@ -1,15 +1,15 @@
 use revm::{
-    Inspector,
     bytecode::opcode::BLOCKHASH,
     context::{ContextSetters, Evm, FrameStack},
     context_interface::ContextTr,
     handler::{
-        EthFrame, EthPrecompiles, EvmTr, FrameInitOrResult, FrameTr, PrecompileProvider,
         evm::{ContextDbError, FrameInitResult},
         instructions::{EthInstructions, InstructionProvider},
+        EthFrame, EthPrecompiles, EvmTr, FrameInitOrResult, FrameTr, PrecompileProvider,
     },
     inspector::{InspectorEvmTr, JournalExt},
-    interpreter::{Instruction, InterpreterResult, interpreter::EthInterpreter},
+    interpreter::{interpreter::EthInterpreter, Instruction, InterpreterResult},
+    Inspector,
 };
 
 use crate::chainspec::MAINNET_CHAIN_ID;

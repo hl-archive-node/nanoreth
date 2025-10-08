@@ -7,7 +7,7 @@ use reth_primitives_traits::SignerRecoverable;
 use revm::{
     context::TxEnv,
     context_interface::transaction::Transaction,
-    primitives::{Address, B256, Bytes, TxKind, U256},
+    primitives::{Address, Bytes, TxKind, B256, U256},
 };
 
 #[auto_impl(&, &mut, Box, Arc)]

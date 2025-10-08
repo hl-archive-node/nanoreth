@@ -1,10 +1,10 @@
 use super::*;
 use crate::{
-    node::types::{ReadPrecompileCalls, reth_compat},
-    pseudo_peer::sources::{LocalBlockSource, hl_node::scan::LocalBlockAndReceipts},
+    node::types::{reth_compat, ReadPrecompileCalls},
+    pseudo_peer::sources::{hl_node::scan::LocalBlockAndReceipts, LocalBlockSource},
 };
 use alloy_consensus::{BlockBody, Header};
-use alloy_primitives::{Address, B64, B256, Bloom, Bytes, U256};
+use alloy_primitives::{Address, Bloom, Bytes, B256, B64, U256};
 use std::{io::Write, time::Duration};
 
 const DEFAULT_FALLBACK_THRESHOLD_FOR_TEST: Duration = Duration::from_millis(5000);

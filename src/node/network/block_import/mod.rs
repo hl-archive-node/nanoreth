@@ -8,7 +8,7 @@ use reth_primitives::NodePrimitives;
 use service::{BlockMsg, ImportEvent, Outcome};
 use std::{
     fmt,
-    task::{Context, Poll, ready},
+    task::{ready, Context, Poll},
 };
 
 use crate::node::network::HlNewBlock;

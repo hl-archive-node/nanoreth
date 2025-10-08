@@ -1,7 +1,7 @@
 [package]
 name = "reth_hl"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 build = "build.rs"
 
 [lib]
@@ -26,67 +26,67 @@ lto = "fat"
 codegen-units = 1
 
 [dependencies]
-reth = { git = "https://github.com/hl-archive-node/reth", rev = "83baf84bcb6d88081fc1b39f97733b8ec345cb88" }
-reth-cli = { git = "https://github.com/hl-archive-node/reth", rev = "83baf84bcb6d88081fc1b39f97733b8ec345cb88" }
-reth-cli-commands = { git = "https://github.com/hl-archive-node/reth", rev = "83baf84bcb6d88081fc1b39f97733b8ec345cb88" }
-reth-basic-payload-builder = { git = "https://github.com/hl-archive-node/reth", rev = "83baf84bcb6d88081fc1b39f97733b8ec345cb88" }
-reth-db = { git = "https://github.com/hl-archive-node/reth", rev = "83baf84bcb6d88081fc1b39f97733b8ec345cb88" }
-reth-db-api = { git = "https://github.com/hl-archive-node/reth", rev = "83baf84bcb6d88081fc1b39f97733b8ec345cb88" }
-reth-chainspec = { git = "https://github.com/hl-archive-node/reth", rev = "83baf84bcb6d88081fc1b39f97733b8ec345cb88" }
-reth-cli-util = { git = "https://github.com/hl-archive-node/reth", rev = "83baf84bcb6d88081fc1b39f97733b8ec345cb88" }
-reth-discv4 = { git = "https://github.com/hl-archive-node/reth", rev = "83baf84bcb6d88081fc1b39f97733b8ec345cb88" }
-reth-engine-primitives = { git = "https://github.com/hl-archive-node/reth", rev = "83baf84bcb6d88081fc1b39f97733b8ec345cb88" }
-reth-ethereum-forks = { git = "https://github.com/hl-archive-node/reth", rev = "83baf84bcb6d88081fc1b39f97733b8ec345cb88" }
-reth-ethereum-payload-builder = { git = "https://github.com/hl-archive-node/reth", rev = "83baf84bcb6d88081fc1b39f97733b8ec345cb88" }
-reth-ethereum-primitives = { git = "https://github.com/hl-archive-node/reth", rev = "83baf84bcb6d88081fc1b39f97733b8ec345cb88" }
-reth-eth-wire = { git = "https://github.com/hl-archive-node/reth", rev = "83baf84bcb6d88081fc1b39f97733b8ec345cb88" }
-reth-eth-wire-types = { git = "https://github.com/hl-archive-node/reth", rev = "83baf84bcb6d88081fc1b39f97733b8ec345cb88" }
-reth-evm = { git = "https://github.com/hl-archive-node/reth", rev = "83baf84bcb6d88081fc1b39f97733b8ec345cb88" }
-reth-evm-ethereum = { git = "https://github.com/hl-archive-node/reth", rev = "83baf84bcb6d88081fc1b39f97733b8ec345cb88" }
-reth-node-core = { git = "https://github.com/hl-archive-node/reth", rev = "83baf84bcb6d88081fc1b39f97733b8ec345cb88" }
-reth-revm = { git = "https://github.com/hl-archive-node/reth", rev = "83baf84bcb6d88081fc1b39f97733b8ec345cb88" }
-reth-network = { git = "https://github.com/hl-archive-node/reth", rev = "83baf84bcb6d88081fc1b39f97733b8ec345cb88" }
-reth-network-p2p = { git = "https://github.com/hl-archive-node/reth", rev = "83baf84bcb6d88081fc1b39f97733b8ec345cb88" }
-reth-network-api = { git = "https://github.com/hl-archive-node/reth", rev = "83baf84bcb6d88081fc1b39f97733b8ec345cb88" }
-reth-node-ethereum = { git = "https://github.com/hl-archive-node/reth", rev = "83baf84bcb6d88081fc1b39f97733b8ec345cb88" }
-reth-network-peers = { git = "https://github.com/hl-archive-node/reth", rev = "83baf84bcb6d88081fc1b39f97733b8ec345cb88" }
-reth-payload-primitives = { git = "https://github.com/hl-archive-node/reth", rev = "83baf84bcb6d88081fc1b39f97733b8ec345cb88" }
-reth-primitives = { git = "https://github.com/hl-archive-node/reth", rev = "83baf84bcb6d88081fc1b39f97733b8ec345cb88" }
-reth-primitives-traits = { git = "https://github.com/hl-archive-node/reth", rev = "83baf84bcb6d88081fc1b39f97733b8ec345cb88" }
-reth-provider = { git = "https://github.com/hl-archive-node/reth", rev = "83baf84bcb6d88081fc1b39f97733b8ec345cb88", features = ["test-utils"] }
-reth-rpc = { git = "https://github.com/hl-archive-node/reth", rev = "83baf84bcb6d88081fc1b39f97733b8ec345cb88" }
-reth-rpc-eth-api = { git = "https://github.com/hl-archive-node/reth", rev = "83baf84bcb6d88081fc1b39f97733b8ec345cb88" }
-reth-rpc-engine-api = { git = "https://github.com/hl-archive-node/reth", rev = "83baf84bcb6d88081fc1b39f97733b8ec345cb88" }
-reth-tracing = { git = "https://github.com/hl-archive-node/reth", rev = "83baf84bcb6d88081fc1b39f97733b8ec345cb88" }
-reth-trie-common = { git = "https://github.com/hl-archive-node/reth", rev = "83baf84bcb6d88081fc1b39f97733b8ec345cb88" }
-reth-trie-db = { git = "https://github.com/hl-archive-node/reth", rev = "83baf84bcb6d88081fc1b39f97733b8ec345cb88" }
-reth-codecs = { git = "https://github.com/hl-archive-node/reth", rev = "83baf84bcb6d88081fc1b39f97733b8ec345cb88" }
-reth-transaction-pool = { git = "https://github.com/hl-archive-node/reth", rev = "83baf84bcb6d88081fc1b39f97733b8ec345cb88" }
-reth-stages-types = { git = "https://github.com/hl-archive-node/reth", rev = "83baf84bcb6d88081fc1b39f97733b8ec345cb88" }
-reth-storage-api = { git = "https://github.com/hl-archive-node/reth", rev = "83baf84bcb6d88081fc1b39f97733b8ec345cb88" }
-reth-errors = { git = "https://github.com/hl-archive-node/reth", rev = "83baf84bcb6d88081fc1b39f97733b8ec345cb88" }
-reth-rpc-convert = { git = "https://github.com/hl-archive-node/reth", rev = "83baf84bcb6d88081fc1b39f97733b8ec345cb88" }
-reth-rpc-eth-types = { git = "https://github.com/hl-archive-node/reth", rev = "83baf84bcb6d88081fc1b39f97733b8ec345cb88" }
-reth-rpc-server-types = { git = "https://github.com/hl-archive-node/reth", rev = "83baf84bcb6d88081fc1b39f97733b8ec345cb88" }
-reth-metrics = { git = "https://github.com/hl-archive-node/reth", rev = "83baf84bcb6d88081fc1b39f97733b8ec345cb88" }
-revm = { version = "29.0.1", default-features = false }
+reth = { git = "https://github.com/sprites0/reth", rev = "40dd1247a55fdceca05e38a1320c054010d5bb34" }
+reth-cli = { git = "https://github.com/sprites0/reth", rev = "40dd1247a55fdceca05e38a1320c054010d5bb34" }
+reth-cli-commands = { git = "https://github.com/sprites0/reth", rev = "40dd1247a55fdceca05e38a1320c054010d5bb34" }
+reth-basic-payload-builder = { git = "https://github.com/sprites0/reth", rev = "40dd1247a55fdceca05e38a1320c054010d5bb34" }
+reth-db = { git = "https://github.com/sprites0/reth", rev = "40dd1247a55fdceca05e38a1320c054010d5bb34" }
+reth-db-api = { git = "https://github.com/sprites0/reth", rev = "40dd1247a55fdceca05e38a1320c054010d5bb34" }
+reth-chainspec = { git = "https://github.com/sprites0/reth", rev = "40dd1247a55fdceca05e38a1320c054010d5bb34" }
+reth-cli-util = { git = "https://github.com/sprites0/reth", rev = "40dd1247a55fdceca05e38a1320c054010d5bb34" }
+reth-discv4 = { git = "https://github.com/sprites0/reth", rev = "40dd1247a55fdceca05e38a1320c054010d5bb34" }
+reth-engine-primitives = { git = "https://github.com/sprites0/reth", rev = "40dd1247a55fdceca05e38a1320c054010d5bb34" }
+reth-ethereum-forks = { git = "https://github.com/sprites0/reth", rev = "40dd1247a55fdceca05e38a1320c054010d5bb34" }
+reth-ethereum-payload-builder = { git = "https://github.com/sprites0/reth", rev = "40dd1247a55fdceca05e38a1320c054010d5bb34" }
+reth-ethereum-primitives = { git = "https://github.com/sprites0/reth", rev = "40dd1247a55fdceca05e38a1320c054010d5bb34" }
+reth-eth-wire = { git = "https://github.com/sprites0/reth", rev = "40dd1247a55fdceca05e38a1320c054010d5bb34" }
+reth-eth-wire-types = { git = "https://github.com/sprites0/reth", rev = "40dd1247a55fdceca05e38a1320c054010d5bb34" }
+reth-evm = { git = "https://github.com/sprites0/reth", rev = "40dd1247a55fdceca05e38a1320c054010d5bb34" }
+reth-evm-ethereum = { git = "https://github.com/sprites0/reth", rev = "40dd1247a55fdceca05e38a1320c054010d5bb34" }
+reth-node-core = { git = "https://github.com/sprites0/reth", rev = "40dd1247a55fdceca05e38a1320c054010d5bb34" }
+reth-revm = { git = "https://github.com/sprites0/reth", rev = "40dd1247a55fdceca05e38a1320c054010d5bb34" }
+reth-network = { git = "https://github.com/sprites0/reth", rev = "40dd1247a55fdceca05e38a1320c054010d5bb34" }
+reth-network-p2p = { git = "https://github.com/sprites0/reth", rev = "40dd1247a55fdceca05e38a1320c054010d5bb34" }
+reth-network-api = { git = "https://github.com/sprites0/reth", rev = "40dd1247a55fdceca05e38a1320c054010d5bb34" }
+reth-node-ethereum = { git = "https://github.com/sprites0/reth", rev = "40dd1247a55fdceca05e38a1320c054010d5bb34" }
+reth-network-peers = { git = "https://github.com/sprites0/reth", rev = "40dd1247a55fdceca05e38a1320c054010d5bb34" }
+reth-payload-primitives = { git = "https://github.com/sprites0/reth", rev = "40dd1247a55fdceca05e38a1320c054010d5bb34" }
+reth-primitives = { git = "https://github.com/sprites0/reth", rev = "40dd1247a55fdceca05e38a1320c054010d5bb34" }
+reth-primitives-traits = { git = "https://github.com/sprites0/reth", rev = "40dd1247a55fdceca05e38a1320c054010d5bb34" }
+reth-provider = { git = "https://github.com/sprites0/reth", rev = "40dd1247a55fdceca05e38a1320c054010d5bb34", features = ["test-utils"] }
+reth-rpc = { git = "https://github.com/sprites0/reth", rev = "40dd1247a55fdceca05e38a1320c054010d5bb34" }
+reth-rpc-eth-api = { git = "https://github.com/sprites0/reth", rev = "40dd1247a55fdceca05e38a1320c054010d5bb34" }
+reth-rpc-engine-api = { git = "https://github.com/sprites0/reth", rev = "40dd1247a55fdceca05e38a1320c054010d5bb34" }
+reth-tracing = { git = "https://github.com/sprites0/reth", rev = "40dd1247a55fdceca05e38a1320c054010d5bb34" }
+reth-trie-common = { git = "https://github.com/sprites0/reth", rev = "40dd1247a55fdceca05e38a1320c054010d5bb34" }
+reth-trie-db = { git = "https://github.com/sprites0/reth", rev = "40dd1247a55fdceca05e38a1320c054010d5bb34" }
+reth-codecs = { git = "https://github.com/sprites0/reth", rev = "40dd1247a55fdceca05e38a1320c054010d5bb34" }
+reth-transaction-pool = { git = "https://github.com/sprites0/reth", rev = "40dd1247a55fdceca05e38a1320c054010d5bb34" }
+reth-stages-types = { git = "https://github.com/sprites0/reth", rev = "40dd1247a55fdceca05e38a1320c054010d5bb34" }
+reth-storage-api = { git = "https://github.com/sprites0/reth", rev = "40dd1247a55fdceca05e38a1320c054010d5bb34" }
+reth-errors = { git = "https://github.com/sprites0/reth", rev = "40dd1247a55fdceca05e38a1320c054010d5bb34" }
+reth-rpc-convert = { git = "https://github.com/sprites0/reth", rev = "40dd1247a55fdceca05e38a1320c054010d5bb34" }
+reth-rpc-eth-types = { git = "https://github.com/sprites0/reth", rev = "40dd1247a55fdceca05e38a1320c054010d5bb34" }
+reth-rpc-server-types = { git = "https://github.com/sprites0/reth", rev = "40dd1247a55fdceca05e38a1320c054010d5bb34" }
+reth-metrics = { git = "https://github.com/sprites0/reth", rev = "40dd1247a55fdceca05e38a1320c054010d5bb34" }
+revm = { version = "29.0.0", default-features = false }
 
 # alloy dependencies
-alloy-genesis = { version = "1.0.37", default-features = false }
-alloy-consensus = { version = "1.0.37", default-features = false }
+alloy-genesis = { version = "1.0.30", default-features = false }
+alloy-consensus = { version = "1.0.30", default-features = false }
 alloy-chains = { version = "0.2.5", default-features = false }
-alloy-eips = { version = "1.0.37", default-features = false }
-alloy-evm = { version = "0.21.0", default-features = false }
+alloy-eips = { version = "1.0.30", default-features = false }
+alloy-evm = { version = "0.20.1", default-features = false }
 alloy-json-abi = { version = "1.3.1", default-features = false }
-alloy-json-rpc = { version = "1.0.37", default-features = false }
+alloy-json-rpc = { version = "1.0.30", default-features = false }
 alloy-dyn-abi = "1.3.1"
-alloy-network = { version = "1.0.37", default-features = false }
+alloy-network = { version = "1.0.30", default-features = false }
 alloy-primitives = { version = "1.3.1", default-features = false, features = ["map-foldhash"] }
 alloy-rlp = { version = "0.3.10", default-features = false, features = ["core-net"] }
-alloy-rpc-types = { version = "1.0.37", features = ["eth"], default-features = false }
-alloy-rpc-types-eth = { version = "1.0.37", default-features = false }
-alloy-rpc-types-engine = { version = "1.0.37", default-features = false }
-alloy-signer = { version = "1.0.37", default-features = false }
+alloy-rpc-types = { version = "1.0.30", features = ["eth"], default-features = false }
+alloy-rpc-types-eth = { version = "1.0.30", default-features = false }
+alloy-rpc-types-engine = { version = "1.0.30", default-features = false }
+alloy-signer = { version = "1.0.30", default-features = false }
 alloy-sol-macro = "1.3.1"
 alloy-sol-types = { version = "1.3.1", default-features = false }
 

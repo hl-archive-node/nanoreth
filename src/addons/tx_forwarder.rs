@@ -2,14 +2,14 @@ use std::time::Duration;
 
 use alloy_json_rpc::RpcObject;
 use alloy_network::Ethereum;
-use alloy_primitives::{B256, Bytes};
+use alloy_primitives::{Bytes, B256};
 use alloy_rpc_types::TransactionRequest;
 use jsonrpsee::{
     http_client::{HttpClient, HttpClientBuilder},
     proc_macros::rpc,
-    types::{ErrorObject, error::INTERNAL_ERROR_CODE},
+    types::{error::INTERNAL_ERROR_CODE, ErrorObject},
 };
-use jsonrpsee_core::{ClientError, RpcResult, async_trait, client::ClientT};
+use jsonrpsee_core::{async_trait, client::ClientT, ClientError, RpcResult};
 use reth::rpc::{result::internal_rpc_err, server_types::eth::EthApiError};
 use reth_rpc_eth_api::RpcReceipt;
 

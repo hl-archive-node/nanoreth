@@ -4,11 +4,11 @@ use crate::{
         pool::HlPoolBuilder,
         primitives::{HlBlock, HlPrimitives},
         rpc::{
-            HlEthApiBuilder,
             engine_api::{
                 builder::HlEngineApiBuilder, payload::HlPayloadTypes,
                 validator::HlPayloadValidatorBuilder,
             },
+            HlEthApiBuilder,
         },
         storage::HlStorage,
     },
@@ -20,14 +20,14 @@ use network::HlNetworkBuilder;
 use reth::{
     api::{FullNodeTypes, NodeTypes},
     builder::{
-        Node, NodeAdapter,
         components::{ComponentsBuilder, NoopPayloadServiceBuilder},
         rpc::RpcAddOns,
+        Node, NodeAdapter,
     },
 };
 use reth_engine_primitives::ConsensusEngineHandle;
 use std::{marker::PhantomData, sync::Arc};
-use tokio::sync::{Mutex, oneshot};
+use tokio::sync::{oneshot, Mutex};
 
 pub mod cli;
 pub mod consensus;

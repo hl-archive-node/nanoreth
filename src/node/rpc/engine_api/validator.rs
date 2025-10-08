@@ -9,7 +9,7 @@ use alloy_primitives::B256;
 use alloy_rpc_types_engine::PayloadError;
 use reth::{
     api::{FullNodeComponents, NodeTypes},
-    builder::{AddOnsContext, rpc::PayloadValidatorBuilder},
+    builder::{rpc::PayloadValidatorBuilder, AddOnsContext},
 };
 use reth_engine_primitives::{ExecutionPayload, PayloadValidator};
 use reth_payload_primitives::NewPayloadError;

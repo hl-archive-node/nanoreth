@@ -1,5 +1,5 @@
 use alloy_primitives::{BlockNumber, Bytes};
-use reth_db::{TableSet, TableType, TableViewer, table::TableInfo, tables};
+use reth_db::{table::TableInfo, tables, TableSet, TableType, TableViewer};
 use std::fmt;
 
 tables! {

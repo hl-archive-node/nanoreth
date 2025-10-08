@@ -1,5 +1,5 @@
 use alloy_chains::{Chain, NamedChain};
-use alloy_primitives::{Address, B64, B256, Bytes, U256, b256};
+use alloy_primitives::{b256, Address, Bytes, B256, B64, U256};
 use reth_chainspec::{ChainHardforks, ChainSpec, EthereumHardfork, ForkCondition, Hardfork};
 use reth_primitives::{Header, SealedHeader};
 use std::sync::LazyLock;

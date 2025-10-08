@@ -1,8 +1,8 @@
 use crate::evm::{spec::HlSpecId, transaction::HlTxEnv};
 use revm::{
-    Context, Journal, MainContext,
     context::{BlockEnv, CfgEnv, TxEnv},
     database_interface::EmptyDB,
+    Context, Journal, MainContext,
 };
 
 /// Type alias for the default context type of the HlEvm.

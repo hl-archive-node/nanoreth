@@ -8,26 +8,29 @@ use crate::{
     },
 };
 use alloy_consensus::{Transaction, TxReceipt};
-use alloy_eips::{Encodable2718, eip7685::Requests};
+use alloy_eips::{eip7685::Requests, Encodable2718};
 use alloy_evm::{block::ExecutableTx, eth::receipt_builder::ReceiptBuilderCtx};
-use alloy_primitives::{Address, Bytes, U160, U256, address, hex};
+use alloy_primitives::{address, hex, Address, Bytes, U160, U256};
 use reth_chainspec::{EthChainSpec, EthereumHardforks, Hardforks};
 use reth_evm::{
-    Database, Evm, FromRecoveredTx, FromTxWithEncoded, IntoTxEnv, OnStateHook,
-    block::BlockValidationError,
+    block::{BlockValidationError, CommitChanges},
     eth::receipt_builder::ReceiptBuilder,
     execute::{BlockExecutionError, BlockExecutor},
     precompiles::{DynPrecompile, PrecompileInput, PrecompilesMap},
+    Database, Evm, FromRecoveredTx, FromTxWithEncoded, IntoTxEnv, OnStateHook,
 };
 use reth_provider::BlockExecutionResult;
 use reth_revm::State;
 use revm::{
-    DatabaseCommit,
-    context::{TxEnv, result::ResultAndState},
+    context::{
+        result::{ExecutionResult, ResultAndState},
+        TxEnv,
+    },
     interpreter::instructions::utility::IntoU256,
     precompile::{PrecompileError, PrecompileOutput, PrecompileResult},
     primitives::HashMap,
     state::Bytecode,
+    DatabaseCommit,
 };
 
 pub fn is_system_transaction(tx: &TransactionSigned) -> bool {
@@ -84,12 +87,12 @@ impl<'a, DB, EVM, Spec, R: ReceiptBuilder> HlBlockExecutor<'a, EVM, Spec, R>
 where
     DB: Database + 'a,
     EVM: Evm<
-            DB = &'a mut State<DB>,
-            Precompiles = PrecompilesMap,
-            Tx: FromRecoveredTx<R::Transaction>
-                    + FromRecoveredTx<TransactionSigned>
-                    + FromTxWithEncoded<TransactionSigned>,
-        >,
+        DB = &'a mut State<DB>,
+        Precompiles = PrecompilesMap,
+        Tx: FromRecoveredTx<R::Transaction>
+                + FromRecoveredTx<TransactionSigned>
+                + FromTxWithEncoded<TransactionSigned>,
+    >,
     Spec: EthereumHardforks + HlHardforks + EthChainSpec + Hardforks + Clone,
     R: ReceiptBuilder<Transaction = TransactionSigned, Receipt: TxReceipt>,
     <R as ReceiptBuilder>::Transaction: Unpin + From<TransactionSigned>,
@@ -107,9 +110,7 @@ where
         const COREWRITER_ENABLED_BLOCK_NUMBER: u64 = 7578300;
         const COREWRITER_CONTRACT_ADDRESS: Address =
             address!("0x3333333333333333333333333333333333333333");
-        const COREWRITER_CODE: &[u8] = &hex!(
-            "608060405234801561000f575f5ffd5b5060043610610029575f3560e01c806317938e131461002d575b5f5ffd5b61004760048036038101906100429190610123565b610049565b005b5f5f90505b61019081101561006557808060010191505061004e565b503373ffffffffffffffffffffffffffffffffffffffff167f8c7f585fb295f7eb1e6aeb8fba61b23a4fe60beda405f0045073b185c74412e383836040516100ae9291906101c8565b60405180910390a25050565b5f5ffd5b5f5ffd5b5f5ffd5b5f5ffd5b5f5ffd5b5f5f83601f8401126100e3576100e26100c2565b5b8235905067ffffffffffffffff811115610100576100ff6100c6565b5b60208301915083600182028301111561011c5761011b6100ca565b5b9250929050565b5f5f60208385031215610139576101386100ba565b5b5f83013567ffffffffffffffff811115610156576101556100be565b5b610162858286016100ce565b92509250509250929050565b5f82825260208201905092915050565b828183375f83830152505050565b5f601f19601f8301169050919050565b5f6101a7838561016e565b93506101b483858461017e565b6101bd8361018c565b840190509392505050565b5f6020820190508181035f8301526101e181848661019c565b9050939250505056fea2646970667358221220f01517e1fbaff8af4bd72cb063cccecbacbb00b07354eea7dd52265d355474fb64736f6c634300081c0033"
-        );
+        const COREWRITER_CODE: &[u8] = &hex!("608060405234801561000f575f5ffd5b5060043610610029575f3560e01c806317938e131461002d575b5f5ffd5b61004760048036038101906100429190610123565b610049565b005b5f5f90505b61019081101561006557808060010191505061004e565b503373ffffffffffffffffffffffffffffffffffffffff167f8c7f585fb295f7eb1e6aeb8fba61b23a4fe60beda405f0045073b185c74412e383836040516100ae9291906101c8565b60405180910390a25050565b5f5ffd5b5f5ffd5b5f5ffd5b5f5ffd5b5f5ffd5b5f5f83601f8401126100e3576100e26100c2565b5b8235905067ffffffffffffffff811115610100576100ff6100c6565b5b60208301915083600182028301111561011c5761011b6100ca565b5b9250929050565b5f5f60208385031215610139576101386100ba565b5b5f83013567ffffffffffffffff811115610156576101556100be565b5b610162858286016100ce565b92509250509250929050565b5f82825260208201905092915050565b828183375f83830152505050565b5f601f19601f8301169050919050565b5f6101a7838561016e565b93506101b483858461017e565b6101bd8361018c565b840190509392505050565b5f6020820190508181035f8301526101e181848661019c565b9050939250505056fea2646970667358221220f01517e1fbaff8af4bd72cb063cccecbacbb00b07354eea7dd52265d355474fb64736f6c634300081c0033");
 
         if self.evm.block().number != U256::from(COREWRITER_ENABLED_BLOCK_NUMBER) {
             return Ok(());
@@ -136,12 +137,12 @@ impl<'a, DB, E, Spec, R> BlockExecutor for HlBlockExecutor<'a, E, Spec, R>
 where
     DB: Database + 'a,
     E: Evm<
-            DB = &'a mut State<DB>,
-            Tx: FromRecoveredTx<R::Transaction>
-                    + FromRecoveredTx<TransactionSigned>
-                    + FromTxWithEncoded<TransactionSigned>,
-            Precompiles = PrecompilesMap,
-        >,
+        DB = &'a mut State<DB>,
+        Tx: FromRecoveredTx<R::Transaction>
+                + FromRecoveredTx<TransactionSigned>
+                + FromTxWithEncoded<TransactionSigned>,
+        Precompiles = PrecompilesMap,
+    >,
     Spec: EthereumHardforks + HlHardforks + EthChainSpec + Hardforks,
     R: ReceiptBuilder<Transaction = TransactionSigned, Receipt: TxReceipt>,
     <R as ReceiptBuilder>::Transaction: Unpin + From<TransactionSigned>,
@@ -160,10 +161,11 @@ where
         Ok(())
     }
 
-    fn execute_transaction_without_commit(
+    fn execute_transaction_with_commit_condition(
         &mut self,
         tx: impl ExecutableTx<Self>,
-    ) -> Result<ResultAndState<<Self::Evm as Evm>::HaltReason>, BlockExecutionError> {
+        f: impl FnOnce(&ExecutionResult<<Self::Evm as Evm>::HaltReason>) -> CommitChanges,
+    ) -> Result<Option<u64>, BlockExecutionError> {
         // The sum of the transaction's gas limit, Tg, and the gas utilized in this block prior,
         // must be no greater than the block's gasLimit.
         let block_available_gas = self.evm.block().gas_limit - self.gas_used;
@@ -176,19 +178,15 @@ where
             .into());
         }
 
-        // Execute transaction and return the result
-        self.evm.transact(&tx).map_err(|err| {
-            let hash = tx.tx().trie_hash();
-            BlockExecutionError::evm(err, hash)
-        })
-    }
+        // Execute transaction.
+        let ResultAndState { result, mut state } = self
+            .evm
+            .transact(&tx)
+            .map_err(|err| BlockExecutionError::evm(err, tx.tx().trie_hash()))?;
 
-    fn commit_transaction(
-        &mut self,
-        output: ResultAndState<<Self::Evm as Evm>::HaltReason>,
-        tx: impl ExecutableTx<Self>,
-    ) -> Result<u64, BlockExecutionError> {
-        let ResultAndState { result, mut state } = output;
+        if !f(&result).should_commit() {
+            return Ok(None);
+        }
 
         let gas_used = result.gas_used();
 
@@ -217,7 +215,7 @@ where
         // Commit the state changes.
         self.evm.db_mut().commit(state);
 
-        Ok(gas_used)
+        Ok(Some(gas_used))
     }
 
     fn finish(self) -> Result<(Self::Evm, BlockExecutionResult<R::Receipt>), BlockExecutionError> {

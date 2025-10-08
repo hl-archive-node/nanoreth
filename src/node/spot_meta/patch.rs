@@ -1,5 +1,5 @@
 use crate::node::spot_meta::SpotId;
-use alloy_primitives::{Address, address};
+use alloy_primitives::{address, Address};
 use std::collections::BTreeMap;
 
 /// Testnet-specific fix for #67

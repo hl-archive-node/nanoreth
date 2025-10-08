@@ -1,32 +1,30 @@
 //! HlNodePrimitives::TransactionSigned; it's the same as ethereum transaction type,
 //! except that it supports pseudo signer for system transactions.
-use std::convert::Infallible;
-
 use crate::evm::transaction::HlTxEnv;
 use alloy_consensus::{
-    SignableTransaction, Signed, Transaction as TransactionTrait, TransactionEnvelope, TxEip1559,
-    TxEip2930, TxEip4844, TxEip7702, TxLegacy, TxType, TypedTransaction, crypto::RecoveryError,
-    error::ValueError, transaction::TxHashRef,
+    crypto::RecoveryError, error::ValueError, SignableTransaction, Signed,
+    Transaction as TransactionTrait, TransactionEnvelope, TxEip1559, TxEip2930, TxEip4844,
+    TxEip7702, TxLegacy, TxType, TypedTransaction,
 };
 use alloy_eips::Encodable2718;
 use alloy_network::TxSigner;
-use alloy_primitives::{Address, TxHash, U256, address};
+use alloy_primitives::{address, Address, TxHash, U256};
 use alloy_rpc_types::{Transaction, TransactionInfo, TransactionRequest};
 use alloy_signer::Signature;
 use reth_codecs::alloy::transaction::{Envelope, FromTxCompact};
 use reth_db::{
-    DatabaseError,
     table::{Compress, Decompress},
+    DatabaseError,
 };
 use reth_ethereum_primitives::PooledTransactionVariant;
 use reth_evm::FromRecoveredTx;
 use reth_primitives::Recovered;
 use reth_primitives_traits::{
-    InMemorySize, SignedTransaction, SignerRecoverable, serde_bincode_compat::SerdeBincodeCompat,
+    serde_bincode_compat::SerdeBincodeCompat, InMemorySize, SignedTransaction, SignerRecoverable,
 };
 use reth_rpc_eth_api::{
-    EthTxEnvError, SignTxRequestError, SignableTxRequest, TryIntoSimTx,
     transaction::{FromConsensusTx, TryIntoTxEnv},
+    EthTxEnvError, SignTxRequestError, SignableTxRequest, TryIntoSimTx,
 };
 use revm::context::{BlockEnv, CfgEnv, TxEnv};
 
@@ -46,12 +44,6 @@ fn s_to_address(s: U256) -> Address {
     let mut buf = [0u8; 20];
     buf[0..20].copy_from_slice(&s.to_be_bytes::<32>()[12..32]);
     Address::from_slice(&buf)
-}
-
-impl TxHashRef for TransactionSigned {
-    fn tx_hash(&self) -> &TxHash {
-        self.inner().tx_hash()
-    }
 }
 
 impl SignerRecoverable for TransactionSigned {
@@ -77,7 +69,11 @@ impl SignerRecoverable for TransactionSigned {
     }
 }
 
-impl SignedTransaction for TransactionSigned {}
+impl SignedTransaction for TransactionSigned {
+    fn tx_hash(&self) -> &TxHash {
+        self.inner().tx_hash()
+    }
+}
 
 // ------------------------------------------------------------
 // NOTE: All lines below are just wrappers for the inner type.
@@ -254,17 +250,9 @@ impl TryIntoTxEnv<HlTxEnv<TxEnv>> for TransactionRequest {
 
 impl FromConsensusTx<TransactionSigned> for Transaction {
     type TxInfo = TransactionInfo;
-    type Err = Infallible;
 
-    fn from_consensus_tx(
-        tx: TransactionSigned,
-        signer: Address,
-        tx_info: Self::TxInfo,
-    ) -> Result<Self, Self::Err> {
-        Ok(Self::from_transaction(
-            Recovered::new_unchecked(tx.into_inner().into(), signer),
-            tx_info,
-        ))
+    fn from_consensus_tx(tx: TransactionSigned, signer: Address, tx_info: Self::TxInfo) -> Self {
+        Self::from_transaction(Recovered::new_unchecked(tx.into_inner().into(), signer), tx_info)
     }
 }
 

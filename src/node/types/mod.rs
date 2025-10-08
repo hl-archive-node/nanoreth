@@ -2,7 +2,7 @@
 //!
 //! Changes:
 //! - ReadPrecompileCalls supports RLP encoding / decoding
-use alloy_primitives::{Address, B256, Bytes, Log};
+use alloy_primitives::{Address, Bytes, Log, B256};
 use alloy_rlp::{Decodable, Encodable, RlpDecodable, RlpEncodable};
 use bytes::BufMut;
 use serde::{Deserialize, Serialize};

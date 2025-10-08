@@ -1,21 +1,21 @@
 use crate::{
-    chainspec::{HlChainSpec, parser::HlChainSpecParser},
-    node::{HlNode, consensus::HlConsensus, evm::config::HlEvmConfig, storage::tables::Tables},
+    chainspec::{parser::HlChainSpecParser, HlChainSpec},
+    node::{consensus::HlConsensus, evm::config::HlEvmConfig, storage::tables::Tables, HlNode},
     pseudo_peer::BlockSourceArgs,
 };
 use clap::{Args, Parser};
 use reth::{
-    CliRunner,
     args::LogArgs,
     builder::{NodeBuilder, WithLaunchContext},
     cli::Commands,
     prometheus_exporter::install_prometheus_recorder,
     version::version_metadata,
+    CliRunner,
 };
 use reth_chainspec::EthChainSpec;
 use reth_cli::chainspec::ChainSpecParser;
 use reth_cli_commands::{common::EnvironmentArgs, launcher::FnLauncher};
-use reth_db::{DatabaseEnv, init_db, mdbx::init_db_for};
+use reth_db::{init_db, mdbx::init_db_for, DatabaseEnv};
 use reth_tracing::FileWorkerGuard;
 use std::{
     fmt::{self},
@@ -136,9 +136,8 @@ where
         // Install the prometheus recorder to be sure to record all metrics
         let _ = install_prometheus_recorder();
 
-        let components = |spec: Arc<C::ChainSpec>| {
-            (HlEvmConfig::new(spec.clone()), Arc::new(HlConsensus::new(spec)))
-        };
+        let components =
+            |spec: Arc<C::ChainSpec>| (HlEvmConfig::new(spec.clone()), HlConsensus::new(spec));
 
         match self.command {
             Commands::Node(command) => runner.run_command_until_exit(|ctx| {
@@ -158,6 +157,9 @@ where
                 runner.run_command_until_exit(|ctx| command.execute::<HlNode, _>(ctx, components))
             }
             Commands::Config(command) => runner.run_until_ctrl_c(command.execute()),
+            Commands::Recover(command) => {
+                runner.run_command_until_exit(|ctx| command.execute::<HlNode>(ctx))
+            }
             Commands::Prune(command) => runner.run_until_ctrl_c(command.execute::<HlNode>()),
             Commands::Import(command) => {
                 runner.run_blocking_until_ctrl_c(command.execute::<HlNode, _>(components))

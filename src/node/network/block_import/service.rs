@@ -1,17 +1,17 @@
 use super::handle::ImportHandle;
 use crate::{
-    HlBlock, HlBlockBody,
     consensus::HlConsensus,
     node::{
         network::HlNewBlock,
         rpc::engine_api::payload::HlPayloadTypes,
         types::{BlockAndReceipts, EvmBlock},
     },
+    HlBlock, HlBlockBody,
 };
 use alloy_consensus::{BlockBody, Header};
 use alloy_primitives::U128;
 use alloy_rpc_types::engine::{ForkchoiceState, PayloadStatusEnum};
-use futures::{StreamExt, future::Either, stream::FuturesUnordered};
+use futures::{future::Either, stream::FuturesUnordered, StreamExt};
 use reth_engine_primitives::{ConsensusEngineHandle, EngineTypes};
 use reth_eth_wire::NewBlock;
 use reth_network::{

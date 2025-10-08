@@ -1,4 +1,4 @@
-use crate::chainspec::{HlChainSpec, hl::hl_testnet};
+use crate::chainspec::{hl::hl_testnet, HlChainSpec};
 
 use super::hl::hl_mainnet;
 use reth_cli::chainspec::ChainSpecParser;

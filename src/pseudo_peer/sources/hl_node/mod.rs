@@ -14,7 +14,7 @@ use self::{
 use super::{BlockSource, BlockSourceBoxed};
 use crate::node::types::BlockAndReceipts;
 use futures::future::BoxFuture;
-use reth_metrics::{Metrics, metrics, metrics::Counter};
+use reth_metrics::{metrics, metrics::Counter, Metrics};
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
@@ -79,8 +79,8 @@ impl BlockSource for HlNodeBlockSource {
                 let too_soon = now - last_poll_time < args.fallback_threshold;
                 if more_recent && too_soon {
                     return Err(eyre::eyre!(
-                        "Not found locally; limiting polling rate before fallback so that hl-node has chance to catch up"
-                    ));
+                            "Not found locally; limiting polling rate before fallback so that hl-node has chance to catch up"
+                        ));
                 }
             }
 

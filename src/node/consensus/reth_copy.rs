@@ -1,11 +1,11 @@
 //! Copy of reth codebase.
 
-use alloy_consensus::{BlockHeader, TxReceipt, proofs::calculate_receipt_root};
+use alloy_consensus::{proofs::calculate_receipt_root, BlockHeader, TxReceipt};
 use alloy_eips::eip7685::Requests;
-use alloy_primitives::{B256, Bloom};
+use alloy_primitives::{Bloom, B256};
 use reth::consensus::ConsensusError;
 use reth_chainspec::EthereumHardforks;
-use reth_primitives::{GotExpected, RecoveredBlock, gas_spent_by_transactions};
+use reth_primitives::{gas_spent_by_transactions, GotExpected, RecoveredBlock};
 use reth_primitives_traits::{Block, Receipt as ReceiptTrait};
 
 pub fn validate_block_post_execution<B, R, ChainSpec>(
