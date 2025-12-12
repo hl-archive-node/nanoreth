@@ -55,6 +55,7 @@ impl RpcBlockSource {
     /// Fetch a single block with all its data using batched RPC calls
     async fn fetch_block(&self, height: u64) -> eyre::Result<BlockAndReceipts> {
         self.metrics.polling_attempt.increment(1);
+        debug!(height, "Fetching block via RPC");
 
         let block_id = format!("0x{:x}", height);
 
@@ -167,7 +168,7 @@ fn hex_decode(s: &str) -> eyre::Result<Vec<u8>> {
 }
 
 /// Decode raw RLP-encoded block from hex string
-/// debug_getRawBlock returns standard Ethereum block RLP, not custom HlBlock format
+/// debug_getRawBlock returns the HlBlock format with trailing fields (sidecars, read_precompile_calls, etc.)
 fn decode_raw_block(hex: &str) -> eyre::Result<HlBlock> {
     use crate::node::primitives::{HlBlockBody, HlHeader, TransactionSigned};
     use alloy_consensus::BlockBody;
@@ -176,14 +177,13 @@ fn decode_raw_block(hex: &str) -> eyre::Result<HlBlock> {
     let bytes = hex_decode(hex)?;
 
     // Try decoding as HlBlock first (custom format with trailing fields)
+    // This is what debug_getRawBlock returns from nanoreth
     if let Ok(block) = HlBlock::decode(&mut bytes.as_slice()) {
-        if !block.body.inner.transactions.is_empty() || block.body.read_precompile_calls.is_some() {
-            return Ok(block);
-        }
+        return Ok(block);
     }
 
     // Fall back to standard Ethereum block format
-    // This is what debug_getRawBlock returns from reth
+    // This is what debug_getRawBlock returns from standard reth (without HL extensions)
     let reth_block: reth_primitives::Block = RethBlock::decode(&mut bytes.as_slice())
         .map_err(|e| eyre::eyre!("RLP decode error (standard format): {}", e))?;
 
@@ -401,4 +401,124 @@ fn convert_to_block_and_receipts(
         read_precompile_calls,
         highest_precompile_address,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Block 1 from mainnet (empty block) - from debug_getRawBlock RPC
+    const BLOCK_1_RAW: &str = "0xf9034df90347f9023da0d8fcc13b6a195b88b7b2da3722ff6cad767b13a8c1e9ffb1c73aa9d216d895f0a01dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347940000000000000000000000000000000000000000a00000000000000000000000000000000000000000000000000000000000000000a056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421a056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421b90100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000008001831e8480808467b4003480a000000000000000000000000000000000000000000000000000000000000000008800000000000000008405f5e100a056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b4218080a00000000000000000000000000000000000000000000000000000000000000000f90104b901000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000080c0c0c0";
+
+    // Block 1715 from mainnet (contains a system transaction)
+    const BLOCK_1715_RAW: &str = "0xf903c9f9034bf90241a07cba18ba47b6944af7e4229f938396a4b94fb904ce751173902d3641b6b2f92ea01dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347940000000000000000000000000000000000000000a00000000000000000000000000000000000000000000000000000000000000000a054ffcff2a59b8e44e86ef5e0970e3282221c824dce31c511c1c49bada2b1d7dea0f78dfb743fbd92ade140711c8bbc542b5e307f0ab7984eff35d751969fe57efab9010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000808206b3831e84808252088467b40d2880a000000000000000000000000000000000000000000000000000000000000000008800000000000000008405f5e100a056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b4218080a00000000000000000000000000000000000000000000000000000000000000000f90104b901000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000080f874b87202f86f8203e78001840bebc2018252089458c3b96d5eed8b01172a394d8916245f4fe04edf872386f26fc1000080c001a0b330e7f3ce637a56510d3f80fb44387dcf058b7168aad8a6f4b1e883490ddd5ea05e8da2a9aec3ec2eae56f71f455d4fa7010ba737d4ac2be396b6a009a7efe58dc0c0808190";
+
+    #[test]
+    fn test_hex_decode() {
+        let hex = "0x48656c6c6f";
+        let bytes = hex_decode(hex).unwrap();
+        assert_eq!(bytes, b"Hello");
+
+        let hex_no_prefix = "48656c6c6f";
+        let bytes = hex_decode(hex_no_prefix).unwrap();
+        assert_eq!(bytes, b"Hello");
+    }
+
+    #[test]
+    fn test_decode_block_1_empty() {
+        let block = decode_raw_block(BLOCK_1_RAW).unwrap();
+
+        assert_eq!(block.header.number, 1);
+        assert_eq!(block.body.inner.transactions.len(), 0);
+        assert!(block.body.inner.ommers.is_empty());
+    }
+
+    #[test]
+    fn test_decode_block_1715_with_transaction() {
+        let block = decode_raw_block(BLOCK_1715_RAW).unwrap();
+
+        assert_eq!(block.header.number, 1715);
+        assert_eq!(block.body.inner.transactions.len(), 1, "Block 1715 should have 1 transaction");
+
+        // Verify the transaction is an EIP-1559 transaction
+        let tx = &block.body.inner.transactions[0];
+        assert!(matches!(tx.inner(), reth_primitives::TransactionSigned::Eip1559(_)));
+    }
+
+    #[test]
+    fn test_convert_to_block_and_receipts_empty_block() {
+        let block = decode_raw_block(BLOCK_1_RAW).unwrap();
+        let receipts = vec![];
+        let extras = HlExtras::default();
+
+        let result = convert_to_block_and_receipts(block, receipts, extras).unwrap();
+
+        match &result.block {
+            crate::node::types::EvmBlock::Reth115(sealed) => {
+                assert_eq!(sealed.header.header.number, 1);
+                assert_eq!(sealed.body.transactions.len(), 0);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_rpc_block_source_fetch_block_1() {
+        // Skip test if RPC endpoint is not available
+        let rpc_url = std::env::var("TEST_RPC_URL")
+            .unwrap_or_else(|_| "http://85.10.200.167:8545".to_string());
+
+        let source = match RpcBlockSource::new(&rpc_url, Duration::from_millis(100)) {
+            Ok(s) => s,
+            Err(_) => {
+                eprintln!("Skipping test: RPC endpoint not available");
+                return;
+            }
+        };
+
+        // Try to fetch block 1
+        match source.fetch_block(1).await {
+            Ok(block_and_receipts) => {
+                match &block_and_receipts.block {
+                    crate::node::types::EvmBlock::Reth115(sealed) => {
+                        assert_eq!(sealed.header.header.number, 1);
+                    }
+                }
+                println!("Successfully fetched block 1");
+            }
+            Err(e) => {
+                panic!("Failed to fetch block 1: {:?}", e);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_rpc_block_source_fetch_block_1715() {
+        // Skip test if RPC endpoint is not available
+        let rpc_url = std::env::var("TEST_RPC_URL")
+            .unwrap_or_else(|_| "http://85.10.200.167:8545".to_string());
+
+        let source = match RpcBlockSource::new(&rpc_url, Duration::from_millis(100)) {
+            Ok(s) => s,
+            Err(_) => {
+                eprintln!("Skipping test: RPC endpoint not available");
+                return;
+            }
+        };
+
+        // Fetch block 1715 which has a system transaction
+        match source.fetch_block(1715).await {
+            Ok(block_and_receipts) => {
+                match &block_and_receipts.block {
+                    crate::node::types::EvmBlock::Reth115(sealed) => {
+                        assert_eq!(sealed.header.header.number, 1715);
+                        // Block 1715 should have at least 1 transaction (the system tx)
+                        println!("Block 1715 has {} transactions", sealed.body.transactions.len());
+                    }
+                }
+            }
+            Err(e) => {
+                panic!("Failed to fetch block 1715: {:?}", e);
+            }
+        }
+    }
 }

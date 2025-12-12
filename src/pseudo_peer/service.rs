@@ -93,7 +93,10 @@ impl BlockPoller {
                     block_tx.send((next_block_number, block)).await?;
                     next_block_number += 1;
                 }
-                Err(_) => tokio::time::sleep(polling_interval).await,
+                Err(e) => {
+                    debug!(next_block_number, error = %e, "Failed to collect block, retrying...");
+                    tokio::time::sleep(polling_interval).await;
+                }
             }
         }
     }
