@@ -40,13 +40,18 @@ pub enum Transaction {
 #[serde(rename_all = "camelCase")]
 pub struct TransactionSigned {
     /// The transaction signature values
-    signature: Signature,
+    pub signature: Signature,
     /// Raw transaction info
     #[deref]
     #[as_ref]
-    transaction: Transaction,
+    pub transaction: Transaction,
 }
 impl TransactionSigned {
+    /// Create a new TransactionSigned
+    pub fn new(signature: Signature, transaction: Transaction) -> Self {
+        Self { signature, transaction }
+    }
+
     fn to_reth_transaction(&self) -> TxSigned {
         match self.transaction.clone() {
             Transaction::Legacy(tx) => {

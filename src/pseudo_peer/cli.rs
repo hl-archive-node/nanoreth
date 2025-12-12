@@ -27,6 +27,22 @@ pub struct BlockSourceArgs {
     #[arg(long)]
     local: bool,
 
+    /// Fetch blocks from trusted nanoreth RPC node(s).
+    /// Supports comma-separated URLs for multi-peer round-robin with failover.
+    ///
+    /// Examples:
+    ///   --block-source-rpc=http://peer1:8545
+    ///   --block-source-rpc=http://peer1:8545,http://peer2:8545,http://peer3:8545
+    ///
+    /// This uses batched RPC calls (debug_getRawBlock, debug_getRawReceipts,
+    /// eth_blockPrecompileData) to fetch blocks from another nanoreth node.
+    #[arg(long, env = "BLOCK_SOURCE_RPC")]
+    block_source_rpc: Option<String>,
+
+    /// Interval for polling new blocks from RPC in milliseconds.
+    #[arg(id = "rpc.polling-interval", long = "rpc.polling-interval", default_value = "100")]
+    rpc_polling_interval: u64,
+
     /// Interval for polling new blocks in S3 in milliseconds.
     #[arg(id = "s3.polling-interval", long = "s3.polling-interval", default_value = "25")]
     s3_polling_interval: u64,
@@ -60,9 +76,22 @@ impl BlockSourceArgs {
             return Ok(BlockSourceConfig::local_default());
         }
 
+        // Check for RPC block source (supports comma-separated URLs)
+        if let Some(rpc_urls_str) = self.block_source_rpc.as_ref() {
+            let urls: Vec<String> = rpc_urls_str
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+            return Ok(BlockSourceConfig::rpc(
+                urls,
+                Duration::from_millis(self.rpc_polling_interval),
+            ));
+        }
+
         let Some(value) = self.block_source.as_ref() else {
             return Err(eyre::eyre!(
-                "You need to specify a block source e.g., --s3 or --block-source=/path/to/blocks"
+                "You need to specify a block source e.g., --s3 or --block-source=/path/to/blocks or --block-source-rpc=http://..."
             ));
         };
 

@@ -98,6 +98,21 @@ pub struct LegacyReceipt {
     logs: Vec<Log>,
 }
 
+impl LegacyReceipt {
+    /// Create a new LegacyReceipt
+    pub fn new(tx_type: u8, success: bool, cumulative_gas_used: u64, logs: Vec<Log>) -> Self {
+        let tx_type = match tx_type {
+            0 => LegacyTxType::Legacy,
+            1 => LegacyTxType::Eip2930,
+            2 => LegacyTxType::Eip1559,
+            3 => LegacyTxType::Eip4844,
+            4 => LegacyTxType::Eip7702,
+            _ => LegacyTxType::Legacy,
+        };
+        Self { tx_type, success, cumulative_gas_used, logs }
+    }
+}
+
 impl From<LegacyReceipt> for EthereumReceipt {
     fn from(r: LegacyReceipt) -> Self {
         EthereumReceipt {
