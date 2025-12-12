@@ -27,10 +27,14 @@ pub struct BlockSourceArgs {
     #[arg(long)]
     local: bool,
 
-    /// Fetch blocks from a trusted nanoreth RPC node.
-    /// Example: http://85.10.200.167:8545
+    /// Fetch blocks from trusted nanoreth RPC node(s).
+    /// Supports comma-separated URLs for multi-peer round-robin with failover.
     ///
-    /// This uses batched RPC calls (eth_getBlockByNumber, eth_getBlockReceipts,
+    /// Examples:
+    ///   --block-source-rpc=http://peer1:8545
+    ///   --block-source-rpc=http://peer1:8545,http://peer2:8545,http://peer3:8545
+    ///
+    /// This uses batched RPC calls (debug_getRawBlock, debug_getRawReceipts,
     /// eth_blockPrecompileData) to fetch blocks from another nanoreth node.
     #[arg(long, env = "BLOCK_SOURCE_RPC")]
     block_source_rpc: Option<String>,
@@ -72,10 +76,15 @@ impl BlockSourceArgs {
             return Ok(BlockSourceConfig::local_default());
         }
 
-        // Check for RPC block source
-        if let Some(rpc_url) = self.block_source_rpc.as_ref() {
+        // Check for RPC block source (supports comma-separated URLs)
+        if let Some(rpc_urls_str) = self.block_source_rpc.as_ref() {
+            let urls: Vec<String> = rpc_urls_str
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
             return Ok(BlockSourceConfig::rpc(
-                rpc_url.clone(),
+                urls,
                 Duration::from_millis(self.rpc_polling_interval),
             ));
         }

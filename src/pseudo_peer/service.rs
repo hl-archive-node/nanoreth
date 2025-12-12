@@ -27,7 +27,7 @@ use std::{
     sync::{Arc, Mutex},
     task::{Context, Poll},
 };
-use tokio::{sync::mpsc, task::JoinHandle};
+use tokio::{sync::{mpsc, Semaphore}, task::JoinHandle};
 use tracing::{debug, info};
 
 /// A cache of block hashes to block numbers.
@@ -76,27 +76,66 @@ impl BlockPoller {
         info!("Starting block poller");
 
         let polling_interval = block_source.polling_interval();
+        let chunk_size = block_source.recommended_chunk_size();
         let mut next_block_number = block_source
             .find_latest_block_number()
             .await
             .ok_or(eyre::eyre!("Failed to find latest block number"))?;
 
+        // Limit concurrent requests to avoid overwhelming the RPC server
+        const MAX_CONCURRENT_REQUESTS: usize = 10;
+        let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS));
+
         loop {
-            if let Some(debug_cutoff_height) = debug_cutoff_height &&
-                next_block_number > debug_cutoff_height
-            {
-                next_block_number = debug_cutoff_height;
+            // Calculate batch end, respecting debug cutoff
+            let batch_end = if let Some(cutoff) = debug_cutoff_height {
+                next_block_number.saturating_add(chunk_size).min(cutoff + 1)
+            } else {
+                next_block_number.saturating_add(chunk_size)
+            };
+
+            // If we've reached the cutoff, wait and retry
+            if next_block_number >= batch_end {
+                tokio::time::sleep(polling_interval).await;
+                continue;
             }
 
-            match block_source.collect_block(next_block_number).await {
-                Ok(block) => {
-                    block_tx.send((next_block_number, block)).await?;
-                    next_block_number += 1;
+            // Fetch blocks in parallel with limited concurrency
+            let block_numbers: Vec<u64> = (next_block_number..batch_end).collect();
+            let fetch_futures: Vec<_> = block_numbers
+                .iter()
+                .map(|&height| {
+                    let source = block_source.clone();
+                    let sem = semaphore.clone();
+                    async move {
+                        let _permit = sem.acquire().await.unwrap();
+                        (height, source.collect_block(height).await)
+                    }
+                })
+                .collect();
+
+            let results = futures::future::join_all(fetch_futures).await;
+
+            // Process results in order, stopping at first failure
+            let mut success_count = 0u64;
+            for (height, result) in results {
+                match result {
+                    Ok(block) => {
+                        block_tx.send((height, block)).await?;
+                        success_count += 1;
+                    }
+                    Err(e) => {
+                        debug!(height, error = %e, "Failed to collect block in batch");
+                        break;
+                    }
                 }
-                Err(e) => {
-                    debug!(next_block_number, error = %e, "Failed to collect block, retrying...");
-                    tokio::time::sleep(polling_interval).await;
-                }
+            }
+
+            if success_count > 0 {
+                next_block_number += success_count;
+            } else {
+                // All failed, wait before retrying
+                tokio::time::sleep(polling_interval).await;
             }
         }
     }

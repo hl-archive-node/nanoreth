@@ -17,6 +17,7 @@ use jsonrpsee_core::client::ClientT;
 use jsonrpsee_core::params::BatchRequestBuilder;
 use reth_metrics::{metrics, Metrics};
 use serde_json::value::RawValue;
+use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
@@ -89,8 +90,6 @@ impl RpcBlockSource {
         let block = decode_raw_block(&block_hex)
             .wrap_err_with(|| format!("Failed to decode raw block at height {}", height))?;
 
-        info!(height, tx_count = block.body.inner.transactions.len(), "Decoded raw block");
-
         // Parse raw receipts response
         let receipts_raw = responses_iter
             .next()
@@ -147,7 +146,7 @@ impl BlockSource for RpcBlockSource {
     }
 
     fn recommended_chunk_size(&self) -> u64 {
-        100
+        1000
     }
 
     fn polling_interval(&self) -> Duration {
@@ -308,7 +307,7 @@ fn convert_to_block_and_receipts(
     extras: HlExtras,
 ) -> eyre::Result<BlockAndReceipts> {
     use crate::node::types::reth_compat::{SealedBlock, SealedHeader, TransactionSigned};
-    use crate::node::types::EvmBlock;
+    use crate::node::types::{EvmBlock, SystemTx};
     use alloy_consensus::Header;
     use alloy_primitives::Signature;
     use reth_codecs::alloy::transaction::Envelope;
@@ -340,43 +339,69 @@ fn convert_to_block_and_receipts(
 
     let hash = block.header.hash_slow();
 
-    // Convert transactions from HlBlock's TransactionSigned to internal format
-    // HlBlock.body.inner.transactions contains node::primitives::TransactionSigned
-    let transactions: Vec<TransactionSigned> = block
-        .body
-        .inner
-        .transactions
+    // Helper to convert a primitive transaction to our format
+    let convert_tx = |tx: crate::node::primitives::TransactionSigned| -> TransactionSigned {
+        let sig = tx.signature();
+        let signature = Signature::new(sig.r(), sig.s(), sig.v());
+        let inner = tx.into_inner();
+        let transaction = match &inner {
+            reth_primitives::TransactionSigned::Legacy(signed) => {
+                crate::node::types::reth_compat::Transaction::Legacy(signed.tx().clone())
+            }
+            reth_primitives::TransactionSigned::Eip2930(signed) => {
+                crate::node::types::reth_compat::Transaction::Eip2930(signed.tx().clone())
+            }
+            reth_primitives::TransactionSigned::Eip1559(signed) => {
+                crate::node::types::reth_compat::Transaction::Eip1559(signed.tx().clone())
+            }
+            reth_primitives::TransactionSigned::Eip4844(signed) => {
+                crate::node::types::reth_compat::Transaction::Eip4844(signed.tx().clone())
+            }
+            reth_primitives::TransactionSigned::Eip7702(signed) => {
+                crate::node::types::reth_compat::Transaction::Eip7702(signed.tx().clone())
+            }
+        };
+        TransactionSigned { signature, transaction }
+    };
+
+    // Identify system transactions by checking gas_price == 0
+    // System transactions in HlBlock format have gas_price = 0
+    use alloy_consensus::Transaction as TxTrait;
+    let is_system_tx = |tx: &crate::node::primitives::TransactionSigned| -> bool {
+        tx.gas_price().map_or(false, |price| price == 0)
+    };
+
+    // Split transactions: system txs (gas_price == 0) vs regular txs
+    let all_txs: Vec<_> = block.body.inner.transactions.into_iter().collect();
+    let (system_tx_primitives, regular_tx_primitives): (Vec<_>, Vec<_>) =
+        all_txs.into_iter().enumerate().partition(|(_, tx)| is_system_tx(tx));
+
+    // Count system transactions for receipt splitting (they come first in the block)
+    let system_tx_count = system_tx_primitives.len();
+
+    // Split receipts - system tx receipts are at the beginning
+    let (system_receipts, regular_receipts): (Vec<_>, Vec<_>) =
+        receipts.into_iter().enumerate().partition(|(i, _)| *i < system_tx_count);
+
+    // Convert system transactions to SystemTx format
+    let system_txs: Vec<SystemTx> = system_tx_primitives
         .into_iter()
-        .map(|tx| {
-            // Get signature from the transaction
-            let sig = tx.signature();
-            let signature = Signature::new(sig.r(), sig.s(), sig.v());
-
-            // Get the inner reth TransactionSigned and extract the transaction
-            let inner = tx.into_inner();
-            let transaction = match &inner {
-                reth_primitives::TransactionSigned::Legacy(signed) => {
-                    crate::node::types::reth_compat::Transaction::Legacy(signed.tx().clone())
-                }
-                reth_primitives::TransactionSigned::Eip2930(signed) => {
-                    crate::node::types::reth_compat::Transaction::Eip2930(signed.tx().clone())
-                }
-                reth_primitives::TransactionSigned::Eip1559(signed) => {
-                    crate::node::types::reth_compat::Transaction::Eip1559(signed.tx().clone())
-                }
-                reth_primitives::TransactionSigned::Eip4844(signed) => {
-                    crate::node::types::reth_compat::Transaction::Eip4844(signed.tx().clone())
-                }
-                reth_primitives::TransactionSigned::Eip7702(signed) => {
-                    crate::node::types::reth_compat::Transaction::Eip7702(signed.tx().clone())
-                }
-            };
-
-            TransactionSigned { signature, transaction }
+        .zip(system_receipts.into_iter())
+        .map(|((_, tx), (_, receipt))| {
+            let converted = convert_tx(tx);
+            SystemTx { tx: converted.transaction, receipt: Some(receipt) }
         })
         .collect();
 
-    // Build the SealedBlock
+    // Convert regular transactions
+    let transactions: Vec<TransactionSigned> =
+        regular_tx_primitives.into_iter().map(|(_, tx)| convert_tx(tx)).collect();
+
+    // Extract regular receipts (without index)
+    let receipts: Vec<LegacyReceipt> =
+        regular_receipts.into_iter().map(|(_, receipt)| receipt).collect();
+
+    // Build the SealedBlock with only regular transactions
     let sealed_block = SealedBlock {
         header: SealedHeader { hash, header },
         body: alloy_consensus::BlockBody {
@@ -397,10 +422,123 @@ fn convert_to_block_and_receipts(
     Ok(BlockAndReceipts {
         block: EvmBlock::Reth115(sealed_block),
         receipts,
-        system_txs: vec![], // System txs are already included in the raw block
+        system_txs,
         read_precompile_calls,
         highest_precompile_address,
     })
+}
+
+/// Block source that distributes requests across multiple RPC peers using round-robin
+#[derive(Debug, Clone)]
+pub struct MultiRpcBlockSource {
+    sources: Vec<RpcBlockSource>,
+    current_index: Arc<std::sync::atomic::AtomicUsize>,
+    polling_interval: Duration,
+    metrics: MultiRpcBlockSourceMetrics,
+}
+
+#[derive(Metrics, Clone)]
+#[metrics(scope = "block_source.multi_rpc")]
+pub struct MultiRpcBlockSourceMetrics {
+    /// Total blocks fetched across all peers
+    pub fetched: metrics::Counter,
+    /// Total errors across all peers
+    pub errors: metrics::Counter,
+    /// Number of failover attempts
+    pub failovers: metrics::Counter,
+}
+
+impl MultiRpcBlockSource {
+    /// Create a new multi-RPC block source from a list of URLs
+    pub fn new(
+        rpc_urls: impl IntoIterator<Item = impl AsRef<str>>,
+        polling_interval: Duration,
+    ) -> eyre::Result<Self> {
+        let sources: Vec<RpcBlockSource> = rpc_urls
+            .into_iter()
+            .map(|url| RpcBlockSource::new(url, polling_interval))
+            .collect::<eyre::Result<Vec<_>>>()?;
+
+        if sources.is_empty() {
+            return Err(eyre::eyre!("At least one RPC URL is required"));
+        }
+
+        info!(peer_count = sources.len(), "Created multi-RPC block source");
+
+        Ok(Self {
+            sources,
+            current_index: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            polling_interval,
+            metrics: MultiRpcBlockSourceMetrics::default(),
+        })
+    }
+
+    /// Get the next peer index using round-robin
+    fn next_peer_index(&self) -> usize {
+        self.current_index
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            % self.sources.len()
+    }
+
+    /// Fetch a block with automatic failover to other peers
+    async fn fetch_block_with_failover(&self, height: u64) -> eyre::Result<BlockAndReceipts> {
+        let start_index = self.next_peer_index();
+        let mut last_error = None;
+
+        for attempt in 0..self.sources.len() {
+            let peer_index = (start_index + attempt) % self.sources.len();
+            let source = &self.sources[peer_index];
+
+            match source.fetch_block(height).await {
+                Ok(block) => {
+                    self.metrics.fetched.increment(1);
+                    if attempt > 0 {
+                        debug!(height, peer_index, attempts = attempt + 1, "Fetched block after failover");
+                    }
+                    return Ok(block);
+                }
+                Err(e) => {
+                    self.metrics.errors.increment(1);
+                    if attempt < self.sources.len() - 1 {
+                        self.metrics.failovers.increment(1);
+                        debug!(height, peer_index, error = %e, "Peer failed, trying next");
+                    }
+                    last_error = Some(e);
+                }
+            }
+        }
+
+        Err(last_error.unwrap_or_else(|| eyre::eyre!("All peers failed")))
+    }
+}
+
+impl BlockSource for MultiRpcBlockSource {
+    fn collect_block(&self, height: u64) -> BoxFuture<'static, eyre::Result<BlockAndReceipts>> {
+        let this = self.clone();
+        async move { this.fetch_block_with_failover(height).await }.boxed()
+    }
+
+    fn find_latest_block_number(&self) -> BoxFuture<'static, Option<u64>> {
+        // Query the first available peer
+        let sources = self.sources.clone();
+        async move {
+            for source in &sources {
+                if let Some(num) = source.find_latest_block_number().await {
+                    return Some(num);
+                }
+            }
+            None
+        }
+        .boxed()
+    }
+
+    fn recommended_chunk_size(&self) -> u64 {
+        1000
+    }
+
+    fn polling_interval(&self) -> Duration {
+        self.polling_interval
+    }
 }
 
 #[cfg(test)]
@@ -435,13 +573,22 @@ mod tests {
 
     #[test]
     fn test_decode_block_1715_with_transaction() {
+        use alloy_consensus::Transaction as TxTrait;
+
         let block = decode_raw_block(BLOCK_1715_RAW).unwrap();
 
         assert_eq!(block.header.number, 1715);
         assert_eq!(block.body.inner.transactions.len(), 1, "Block 1715 should have 1 transaction");
 
-        // Verify the transaction is an EIP-1559 transaction
+        // Check system_tx_count from the header extras
+        println!("Block 1715 system_tx_count: {}", block.header.extras.system_tx_count);
+
+        // Check gas_price of the transaction
         let tx = &block.body.inner.transactions[0];
+        println!("Transaction gas_price: {:?}", tx.gas_price());
+        println!("Transaction is_system_tx (gas_price == 0): {}", tx.gas_price().map_or(false, |p| p == 0));
+
+        // Verify the transaction is an EIP-1559 transaction
         assert!(matches!(tx.inner(), reth_primitives::TransactionSigned::Eip1559(_)));
     }
 
@@ -508,11 +655,17 @@ mod tests {
         // Fetch block 1715 which has a system transaction
         match source.fetch_block(1715).await {
             Ok(block_and_receipts) => {
+                // Block 1715 should have 1 system tx and 0 regular txs
+                assert_eq!(block_and_receipts.system_txs.len(), 1, "Block 1715 should have 1 system tx");
+
                 match &block_and_receipts.block {
                     crate::node::types::EvmBlock::Reth115(sealed) => {
                         assert_eq!(sealed.header.header.number, 1715);
-                        // Block 1715 should have at least 1 transaction (the system tx)
-                        println!("Block 1715 has {} transactions", sealed.body.transactions.len());
+                        // After splitting, regular transactions should be 0
+                        assert_eq!(sealed.body.transactions.len(), 0, "Block 1715 should have 0 regular txs after splitting");
+                        println!("Block 1715 has {} system txs and {} regular txs",
+                                 block_and_receipts.system_txs.len(),
+                                 sealed.body.transactions.len());
                     }
                 }
             }

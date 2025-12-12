@@ -15,7 +15,7 @@ mod utils;
 pub use cached::CachedBlockSource;
 pub use hl_node::{HlNodeBlockSource, HlNodeBlockSourceArgs};
 pub use local::LocalBlockSource;
-pub use rpc::RpcBlockSource;
+pub use rpc::{MultiRpcBlockSource, RpcBlockSource};
 pub use s3::S3BlockSource;
 
 const DEFAULT_POLLING_INTERVAL: Duration = Duration::from_millis(25);
