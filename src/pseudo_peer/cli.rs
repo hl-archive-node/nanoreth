@@ -27,6 +27,18 @@ pub struct BlockSourceArgs {
     #[arg(long)]
     local: bool,
 
+    /// Fetch blocks from a trusted nanoreth RPC node.
+    /// Example: http://85.10.200.167:8545
+    ///
+    /// This uses batched RPC calls (eth_getBlockByNumber, eth_getBlockReceipts,
+    /// eth_blockPrecompileData) to fetch blocks from another nanoreth node.
+    #[arg(long, env = "BLOCK_SOURCE_RPC")]
+    block_source_rpc: Option<String>,
+
+    /// Interval for polling new blocks from RPC in milliseconds.
+    #[arg(id = "rpc.polling-interval", long = "rpc.polling-interval", default_value = "100")]
+    rpc_polling_interval: u64,
+
     /// Interval for polling new blocks in S3 in milliseconds.
     #[arg(id = "s3.polling-interval", long = "s3.polling-interval", default_value = "25")]
     s3_polling_interval: u64,
@@ -60,9 +72,17 @@ impl BlockSourceArgs {
             return Ok(BlockSourceConfig::local_default());
         }
 
+        // Check for RPC block source
+        if let Some(rpc_url) = self.block_source_rpc.as_ref() {
+            return Ok(BlockSourceConfig::rpc(
+                rpc_url.clone(),
+                Duration::from_millis(self.rpc_polling_interval),
+            ));
+        }
+
         let Some(value) = self.block_source.as_ref() else {
             return Err(eyre::eyre!(
-                "You need to specify a block source e.g., --s3 or --block-source=/path/to/blocks"
+                "You need to specify a block source e.g., --s3 or --block-source=/path/to/blocks or --block-source-rpc=http://..."
             ));
         };
 
