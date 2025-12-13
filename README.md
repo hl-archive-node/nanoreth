@@ -60,19 +60,19 @@ $ reth-hl node --http --http.addr 0.0.0.0 --http.api eth,ots,net,web3 \
 
 ## How to run (testnet)
 
-Testnet is supported since block 30281484.
+Testnet is supported since block 34112653.
 
 ```sh
-# Get testnet genesis at block 30281484
+# Get testnet genesis at block 34112653
 $ cd ~
 $ git clone https://github.com/sprites0/hl-testnet-genesis
 $ zstd --rm -d ~/hl-testnet-genesis/*.zst
 
 # Init node
 $ make install
-$ reth-hl init-state --without-evm --chain testnet --header ~/hl-testnet-genesis/30281484.rlp \
-  --header-hash 0x147cc3c09e9ddbb11799c826758db284f77099478ab5f528d3a57a6105516c21 \
-  ~/hl-testnet-genesis/30281484.jsonl --total-difficulty 0 
+$ reth-hl init-state --without-evm --chain testnet --header ~/hl-testnet-genesis/34112653.rlp \
+  --header-hash 0xeb79aca618ab9fda6d463fddd3ad439045deada1f539cbab1c62d7e6a0f5859a \
+  ~/hl-testnet-genesis/34112653.jsonl --total-difficulty 0 
 
 # Run node
 $ reth-hl node --chain testnet --http --http.addr 0.0.0.0 --http.api eth,ots,net,web3 \
