@@ -131,10 +131,8 @@ impl BlockSource for RpcBlockSource {
             match block_number {
                 Ok(num) => {
                     let tip = num.to::<u64>();
-                    info!("Latest block number from RPC: {} (starting sync from block 1)", tip);
-                    // For RPC source, we always start from block 1 for initial sync
-                    // The poller will sync sequentially from 1 to the tip
-                    Some(1)
+                    debug!("Latest block number from RPC: {}", tip);
+                    Some(tip)
                 }
                 Err(e) => {
                     warn!("Failed to get latest block number: {}", e);

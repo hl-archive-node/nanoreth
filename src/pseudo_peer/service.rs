@@ -27,7 +27,7 @@ use std::{
     sync::{Arc, Mutex},
     task::{Context, Poll},
 };
-use tokio::{sync::{mpsc, Semaphore}, task::JoinHandle};
+use tokio::{sync::mpsc, task::JoinHandle};
 use tracing::{debug, info};
 
 /// A cache of block hashes to block numbers.
@@ -38,11 +38,14 @@ pub fn new_blockhash_cache() -> BlockHashCache {
     Arc::new(RwLock::new(LruBiMap::new(BLOCKHASH_CACHE_LIMIT)))
 }
 
-/// A block poller that polls blocks from `BlockSource` and sends them to the `block_tx`
+/// A tip announcer that periodically announces the latest block tip to trigger staged sync.
+/// Instead of sending every block through BlockImport, this only announces the tip,
+/// and reth's staged sync will request headers/bodies via GetBlockHeaders/GetBlockBodies.
 #[derive(Debug)]
 pub struct BlockPoller {
     chain_id: u64,
-    block_rx: mpsc::Receiver<(u64, BlockAndReceipts)>,
+    /// Receives tip updates (block number, block data) from the background task
+    tip_rx: mpsc::Receiver<(u64, BlockAndReceipts)>,
     task: JoinHandle<eyre::Result<()>>,
     blockhash_cache: BlockHashCache,
 }
@@ -56,9 +59,15 @@ impl BlockPoller {
     ) -> (Self, mpsc::Sender<()>) {
         let block_source = Arc::new(block_source);
         let (start_tx, start_rx) = mpsc::channel(1);
-        let (block_tx, block_rx) = mpsc::channel(100);
-        let task = tokio::spawn(Self::task(start_rx, block_source, block_tx, debug_cutoff_height));
-        (Self { chain_id, block_rx, task, blockhash_cache: blockhash_cache.clone() }, start_tx)
+        // Channel for tip announcements only
+        let (tip_tx, tip_rx) = mpsc::channel(10);
+        let task = tokio::spawn(Self::tip_announcement_task(
+            start_rx,
+            block_source,
+            tip_tx,
+            debug_cutoff_height,
+        ));
+        (Self { chain_id, tip_rx, task, blockhash_cache: blockhash_cache.clone() }, start_tx)
     }
 
     #[allow(unused)]
@@ -66,87 +75,63 @@ impl BlockPoller {
         &self.task
     }
 
-    async fn task<BS: BlockSource>(
+    /// Background task that polls for the latest tip and announces it periodically.
+    /// This triggers reth's staged sync to request headers/bodies from PseudoPeer.
+    async fn tip_announcement_task<BS: BlockSource>(
         mut start_rx: mpsc::Receiver<()>,
         block_source: Arc<BS>,
-        block_tx: mpsc::Sender<(u64, BlockAndReceipts)>,
+        tip_tx: mpsc::Sender<(u64, BlockAndReceipts)>,
         debug_cutoff_height: Option<u64>,
     ) -> eyre::Result<()> {
         start_rx.recv().await.ok_or(eyre::eyre!("Failed to receive start signal"))?;
-        info!("Starting block poller");
+        info!("Starting tip announcer for staged sync");
 
         let polling_interval = block_source.polling_interval();
-        let chunk_size = block_source.recommended_chunk_size();
-        let mut next_block_number = block_source
-            .find_latest_block_number()
-            .await
-            .ok_or(eyre::eyre!("Failed to find latest block number"))?;
-
-        // Limit concurrent requests to avoid overwhelming the RPC server
-        const MAX_CONCURRENT_REQUESTS: usize = 10;
-        let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS));
+        let mut last_announced_tip: Option<u64> = None;
 
         loop {
-            // Calculate batch end, respecting debug cutoff
-            let batch_end = if let Some(cutoff) = debug_cutoff_height {
-                next_block_number.saturating_add(chunk_size).min(cutoff + 1)
-            } else {
-                next_block_number.saturating_add(chunk_size)
-            };
-
-            // If we've reached the cutoff, wait and retry
-            if next_block_number >= batch_end {
+            // Get the latest block number from the source
+            let Some(mut latest) = block_source.find_latest_block_number().await else {
+                debug!("Failed to get latest block number, retrying...");
                 tokio::time::sleep(polling_interval).await;
                 continue;
+            };
+
+            // Apply debug cutoff if set
+            if let Some(cutoff) = debug_cutoff_height {
+                latest = latest.min(cutoff);
             }
 
-            // Fetch blocks in parallel with limited concurrency
-            let block_numbers: Vec<u64> = (next_block_number..batch_end).collect();
-            let fetch_futures: Vec<_> = block_numbers
-                .iter()
-                .map(|&height| {
-                    let source = block_source.clone();
-                    let sem = semaphore.clone();
-                    async move {
-                        let _permit = sem.acquire().await.unwrap();
-                        (height, source.collect_block(height).await)
-                    }
-                })
-                .collect();
-
-            let results = futures::future::join_all(fetch_futures).await;
-
-            // Process results in order, stopping at first failure
-            let mut success_count = 0u64;
-            for (height, result) in results {
-                match result {
+            // Only announce if we have a new tip
+            if last_announced_tip.map_or(true, |last| latest > last) {
+                // Fetch the tip block to announce
+                match block_source.collect_block(latest).await {
                     Ok(block) => {
-                        block_tx.send((height, block)).await?;
-                        success_count += 1;
+                        info!(tip = latest, "Announcing new tip for staged sync");
+                        if tip_tx.send((latest, block)).await.is_err() {
+                            debug!("Tip channel closed, stopping announcer");
+                            break;
+                        }
+                        last_announced_tip = Some(latest);
                     }
                     Err(e) => {
-                        debug!(height, error = %e, "Failed to collect block in batch");
-                        break;
+                        debug!(height = latest, error = %e, "Failed to fetch tip block");
                     }
                 }
             }
 
-            if success_count > 0 {
-                next_block_number += success_count;
-            } else {
-                // All failed, wait before retrying
-                tokio::time::sleep(polling_interval).await;
-            }
+            tokio::time::sleep(polling_interval).await;
         }
+
+        Ok(())
     }
 }
 
 impl BlockImport<HlNewBlock> for BlockPoller {
     fn poll(&mut self, _cx: &mut Context<'_>) -> Poll<BlockImportEvent<HlNewBlock>> {
-        debug!("(receiver) Polling");
-        match Pin::new(&mut self.block_rx).poll_recv(_cx) {
+        match Pin::new(&mut self.tip_rx).poll_recv(_cx) {
             Poll::Ready(Some((number, block))) => {
-                debug!("Polled block: {}", number);
+                debug!(tip = number, "Announcing tip block");
                 let reth_block = block.to_reth_block(self.chain_id);
                 let hash = reth_block.header.hash_slow();
                 self.blockhash_cache.write().insert(hash, number);
