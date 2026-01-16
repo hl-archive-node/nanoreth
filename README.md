@@ -72,9 +72,73 @@ $ zstd --rm -d ~/hl-testnet-genesis/*.zst
 $ make install
 $ reth-hl init-state --without-evm --chain testnet --header ~/hl-testnet-genesis/34112653.rlp \
   --header-hash 0xeb79aca618ab9fda6d463fddd3ad439045deada1f539cbab1c62d7e6a0f5859a \
-  ~/hl-testnet-genesis/34112653.jsonl --total-difficulty 0 
+  ~/hl-testnet-genesis/34112653.jsonl --total-difficulty 0
 
 # Run node
 $ reth-hl node --chain testnet --http --http.addr 0.0.0.0 --http.api eth,ots,net,web3 \
     --ws --ws.addr 0.0.0.0 --ws.origins '*' --ws.api eth,ots,net,web3 --ingest-dir ~/evm-blocks --ws.port 8546
 ```
+
+## How to run (RPC sync from trusted nanoreth node)
+
+Instead of fetching blocks from S3 or local files, you can sync blocks directly from a trusted nanoreth RPC node. This is useful for:
+- Quick setup without AWS credentials
+- Syncing from a trusted peer in your infrastructure
+- Reducing dependency on S3
+- Load balancing across multiple RPC endpoints with automatic failover
+
+### How it works
+
+The RPC block source fetches blocks using batched RPC calls to a nanoreth node:
+- `debug_getRawBlock` - Returns RLP-encoded block data including all transactions (including system transactions)
+- `debug_getRawReceipts` - Returns RLP-encoded receipts for all transactions
+- `eth_blockPrecompileData` - Returns HyperEVM-specific extras (read_precompile_calls, highest_precompile_address)
+
+The blocks are fetched with automatic polling and support for:
+- **Single peer**: Fetches from one RPC endpoint
+- **Multi-peer with failover**: Round-robin distribution across multiple peers with automatic failover if a peer fails
+
+### Usage
+
+#### Single RPC peer
+
+```sh
+reth-hl node --http --http.addr 0.0.0.0 --http.api eth,ots,net,web3 \
+  --ws --ws.addr 0.0.0.0 --ws.origins '*' --ws.api eth,ots,net,web3 \
+  --ws.port 8545 --http.port 8545 \
+  --block-source-rpc=http://trusted-node:8545
+```
+
+#### Multiple RPC peers with round-robin and failover
+
+For improved reliability, you can specify multiple RPC endpoints separated by commas. The node will:
+- Distribute requests across peers using round-robin
+- Automatically failover to the next peer if one fails
+- Track metrics for each peer (fetched blocks, errors, failovers)
+
+```sh
+reth-hl node --http --http.addr 0.0.0.0 --http.api eth,ots,net,web3 \
+  --ws --ws.addr 0.0.0.0 --ws.origins '*' --ws.api eth,ots,net,web3 \
+  --ws.port 8545 --http.port 8545 \
+  --block-source-rpc=http://peer1:8545,http://peer2:8545,http://peer3:8545
+```
+
+#### Configuration options
+
+- `--block-source-rpc=<url>` - RPC endpoint URL(s). Supports comma-separated URLs for multi-peer setup
+- `--rpc.polling-interval=<ms>` - Polling interval in milliseconds (default: 100ms)
+
+You can also set the RPC endpoint via environment variable:
+```sh
+export BLOCK_SOURCE_RPC=http://trusted-node:8545
+reth-hl node --http --ws ...
+```
+
+### Requirements
+
+- The source RPC node must be a nanoreth node with the following RPC endpoints enabled:
+  - `debug_getRawBlock`
+  - `debug_getRawReceipts`
+  - `eth_blockPrecompileData`
+  - `eth_blockNumber`
+- The source node should have `--http.api` including at least `debug` and `eth` namespaces
