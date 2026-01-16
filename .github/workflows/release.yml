@@ -1,0 +1,92 @@
+name: Release nanoreth
+
+on:
+  push:
+    tags:
+      - "v*"
+      - "nb-*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-amd64:
+    name: Build x86_64-unknown-linux-gnu
+    runs-on: ubuntu-latest
+
+    env:
+      CARGO_TERM_COLOR: always
+      RUSTFLAGS: ""
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target
+          key: ${{ runner.os }}-x86_64-unknown-linux-gnu-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-x86_64-unknown-linux-gnu-cargo
+
+      - name: Build
+        run: |
+          cargo build --locked --release --target x86_64-unknown-linux-gnu --bin reth-hl --features "jemalloc,asm-keccak,min-debug-logs"
+
+      - name: Prepare package
+        shell: bash
+        run: |
+          set -euo pipefail
+          BIN_NAME="reth-hl"
+          TAG_NAME="${GITHUB_REF_NAME}"
+          VERSION="${TAG_NAME#v}"
+          TARGET="x86_64-unknown-linux-gnu"
+          OUTDIR="dist"
+          mkdir -p "$OUTDIR"
+          BIN_PATH="target/$TARGET/release/${BIN_NAME}"
+          PKG_NAME="nanoreth-${TARGET}.tar.gz"
+          strip -s "$BIN_PATH" || true
+          tar -C "target/$TARGET/release" -czf "$OUTDIR/$PKG_NAME" "$BIN_NAME"
+          echo "PKG_PATH=$OUTDIR/$PKG_NAME" >> $GITHUB_ENV
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: x86_64-unknown-linux-gnu
+          path: ${{ env.PKG_PATH }}
+
+  release:
+    name: Create Release
+    needs: [build-amd64]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Gather files
+        id: gather
+        run: |
+          echo "files<<EOF" >> $GITHUB_OUTPUT
+          find dist -type f -maxdepth 2 -print >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: ${{ steps.gather.outputs.files }}
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
