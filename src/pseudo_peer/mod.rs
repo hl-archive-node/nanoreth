@@ -43,6 +43,7 @@ pub async fn start_pseudo_peer(
     destination_peer: String,
     block_source: BlockSourceBoxed,
     debug_cutoff_height: Option<u64>,
+    db_block_number: Option<DbBlockNumberFn>,
 ) -> eyre::Result<()> {
     let blockhash_cache = new_blockhash_cache();
 
@@ -70,7 +71,8 @@ pub async fn start_pseudo_peer(
     let mut network_events = network_handle.event_listener();
     info!("Starting network manager...");
 
-    let mut service = PseudoPeer::new(chain_spec, block_source, blockhash_cache.clone());
+    let mut service =
+        PseudoPeer::new(chain_spec, block_source, blockhash_cache.clone(), db_block_number);
     tokio::spawn(network);
 
     // Directly add the main node as a peer (bypasses discovery)

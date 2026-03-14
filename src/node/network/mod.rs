@@ -9,7 +9,7 @@ use crate::{
         rpc::engine_api::payload::HlPayloadTypes,
         types::ReadPrecompileCalls,
     },
-    pseudo_peer::{BlockSourceConfig, start_pseudo_peer},
+    pseudo_peer::{BlockSourceConfig, DbBlockNumberFn, start_pseudo_peer},
 };
 use alloy_primitives::B256;
 use alloy_rlp::{Decodable, Encodable};
@@ -270,6 +270,13 @@ where
                 .block_number +
                 1;
 
+            // Give the pseudo-peer a handle to the node's database so it can
+            // resolve hash→number directly instead of scanning the block source.
+            let provider = ctx.provider().clone();
+            let db_block_number: DbBlockNumberFn = Arc::new(move |hash| {
+                provider.block_number(hash).ok().flatten()
+            });
+
             let chain_spec = ctx.chain_spec();
             let chain_id = chain_spec.inner.chain().id();
             ctx.task_executor().spawn_critical("pseudo peer", async move {
@@ -308,6 +315,7 @@ where
                     local_node_record.to_string(),
                     block_source,
                     debug_cutoff_height,
+                    Some(db_block_number),
                 )
                 .await
                 .unwrap();
