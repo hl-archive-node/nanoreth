@@ -27,8 +27,8 @@ use reth_network::{NetworkConfig, NetworkHandle, NetworkManager};
 use reth_network_api::PeersInfo;
 use reth_payload_primitives::EngineApiMessageVersion;
 use reth_provider::StageCheckpointReader;
-use reth_storage_api::{BlockHashReader, BlockNumReader};
 use reth_stages_types::StageId;
+use reth_storage_api::{BlockHashReader, BlockNumReader};
 use std::{
     net::{Ipv4Addr, SocketAddr},
     sync::Arc,
@@ -267,8 +267,8 @@ where
                 .provider()
                 .get_stage_checkpoint(StageId::Finish)?
                 .unwrap_or_default()
-                .block_number
-                + 1;
+                .block_number +
+                1;
 
             let chain_spec = ctx.chain_spec();
             let chain_id = chain_spec.inner.chain().id();
@@ -284,8 +284,7 @@ where
                     match block_source.collect_block(latest).await {
                         Ok(block) => {
                             let reth_block = block.to_reth_block(chain_id);
-                            let hash =
-                                alloy_primitives::Sealable::hash_slow(&reth_block.header);
+                            let hash = alloy_primitives::Sealable::hash_slow(&reth_block.header);
                             info!(
                                 target: "reth::cli",
                                 number = %latest,

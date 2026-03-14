@@ -25,7 +25,9 @@ pub mod prelude {
     pub use super::{
         config::BlockSourceConfig,
         service::{BlockPoller, PseudoPeer},
-        sources::{BlockSource, CachedBlockSource, LocalBlockSource, RpcBlockSource, S3BlockSource},
+        sources::{
+            BlockSource, CachedBlockSource, LocalBlockSource, RpcBlockSource, S3BlockSource,
+        },
     };
 }
 

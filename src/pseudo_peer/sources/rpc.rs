@@ -35,7 +35,11 @@ impl RpcBlockSource {
             .build(&url)
             .unwrap_or_else(|e| panic!("Failed to build RPC client for {url}: {e}"));
         info!("RPC block source connected to {url}");
-        Self { client: Arc::new(client), polling_interval, metrics: RpcBlockSourceMetrics::default() }
+        Self {
+            client: Arc::new(client),
+            polling_interval,
+            metrics: RpcBlockSourceMetrics::default(),
+        }
     }
 }
 
@@ -75,29 +79,24 @@ impl BlockSource for RpcBlockSource {
             const BATCH_SIZE: usize = 500;
             const MAX_CONCURRENT_BATCHES: usize = 20;
 
-            let batches: Vec<Vec<u64>> =
-                heights.chunks(BATCH_SIZE).map(|c| c.to_vec()).collect();
+            let batches: Vec<Vec<u64>> = heights.chunks(BATCH_SIZE).map(|c| c.to_vec()).collect();
 
-            let results: Vec<eyre::Result<Vec<BlockAndReceipts>>> =
-                futures::stream::iter(batches)
-                    .map(|batch| {
-                        let client = client.clone();
-                        let metrics = metrics.clone();
-                        async move {
-                            metrics.polling_attempt.increment(batch.len() as u64);
-                            let bytes: Bytes =
-                                client.request("hl_syncGetBlocks", (batch,)).await?;
-                            let mut decoder =
-                                lz4_flex::frame::FrameDecoder::new(&bytes[..]);
-                            let blocks: Vec<BlockAndReceipts> =
-                                rmp_serde::from_read(&mut decoder)?;
-                            metrics.fetched.increment(blocks.len() as u64);
-                            Ok(blocks)
-                        }
-                    })
-                    .buffered(MAX_CONCURRENT_BATCHES)
-                    .collect()
-                    .await;
+            let results: Vec<eyre::Result<Vec<BlockAndReceipts>>> = futures::stream::iter(batches)
+                .map(|batch| {
+                    let client = client.clone();
+                    let metrics = metrics.clone();
+                    async move {
+                        metrics.polling_attempt.increment(batch.len() as u64);
+                        let bytes: Bytes = client.request("hl_syncGetBlocks", (batch,)).await?;
+                        let mut decoder = lz4_flex::frame::FrameDecoder::new(&bytes[..]);
+                        let blocks: Vec<BlockAndReceipts> = rmp_serde::from_read(&mut decoder)?;
+                        metrics.fetched.increment(blocks.len() as u64);
+                        Ok(blocks)
+                    }
+                })
+                .buffered(MAX_CONCURRENT_BATCHES)
+                .collect()
+                .await;
 
             let mut all_blocks = Vec::with_capacity(heights.len());
             for result in results {

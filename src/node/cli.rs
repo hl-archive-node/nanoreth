@@ -174,23 +174,23 @@ where
                 // Validate file paths early with clear error messages.
                 // On Linux, File::open() succeeds on directories, then read_to_end()
                 // fails with a cryptic "Is a directory" error.
-                if command.without_evm {
-                    if let Some(ref path) = command.header {
-                        if path.is_dir() {
-                            return Err(eyre::eyre!(
-                                "--header path '{}' is a directory, not a file. \
-                                 If using Docker, ensure the source file exists on the host \
-                                 (missing source files cause Docker to create directories \
-                                 at the mount point).",
-                                path.display()
-                            ));
-                        }
-                        if !path.exists() {
-                            return Err(eyre::eyre!(
-                                "--header path '{}' does not exist",
-                                path.display()
-                            ));
-                        }
+                if command.without_evm
+                    && let Some(ref path) = command.header
+                {
+                    if path.is_dir() {
+                        return Err(eyre::eyre!(
+                            "--header path '{}' is a directory, not a file. \
+                             If using Docker, ensure the source file exists on the host \
+                             (missing source files cause Docker to create directories \
+                             at the mount point).",
+                            path.display()
+                        ));
+                    }
+                    if !path.exists() {
+                        return Err(eyre::eyre!(
+                            "--header path '{}' does not exist",
+                            path.display()
+                        ));
                     }
                 }
                 if command.state.is_dir() {

@@ -85,10 +85,7 @@ impl BlockSourceArgs {
             } else {
                 format!("http://{url}")
             };
-            Ok(Some(BlockSourceConfig::rpc(
-                url,
-                Duration::from_millis(self.rpc_polling_interval),
-            )))
+            Ok(Some(BlockSourceConfig::rpc(url, Duration::from_millis(self.rpc_polling_interval))))
         } else {
             Ok(Some(BlockSourceConfig::local(value.into())))
         }

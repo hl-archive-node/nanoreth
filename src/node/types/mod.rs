@@ -84,20 +84,34 @@ impl BlockAndReceipts {
         let all_txs = block.body.inner.transactions;
 
         // Split system txs from regular txs
-        let (system_tx_list, regular_tx_list) = if system_tx_count > 0 && system_tx_count <= all_txs.len() {
-            let (sys, reg) = all_txs.into_iter().enumerate().partition::<Vec<_>, _>(|(i, _)| *i < system_tx_count);
-            (sys.into_iter().map(|(_, tx)| tx).collect::<Vec<_>>(), reg.into_iter().map(|(_, tx)| tx).collect::<Vec<_>>())
-        } else {
-            (vec![], all_txs)
-        };
+        let (system_tx_list, regular_tx_list) =
+            if system_tx_count > 0 && system_tx_count <= all_txs.len() {
+                let (sys, reg) = all_txs
+                    .into_iter()
+                    .enumerate()
+                    .partition::<Vec<_>, _>(|(i, _)| *i < system_tx_count);
+                (
+                    sys.into_iter().map(|(_, tx)| tx).collect::<Vec<_>>(),
+                    reg.into_iter().map(|(_, tx)| tx).collect::<Vec<_>>(),
+                )
+            } else {
+                (vec![], all_txs)
+            };
 
         // Split receipts
-        let (system_receipts, regular_receipts) = if system_tx_count > 0 && system_tx_count <= receipts.len() {
-            let (sys, reg) = receipts.into_iter().enumerate().partition::<Vec<_>, _>(|(i, _)| *i < system_tx_count);
-            (sys.into_iter().map(|(_, r)| r).collect::<Vec<_>>(), reg.into_iter().map(|(_, r)| r).collect::<Vec<_>>())
-        } else {
-            (vec![], receipts)
-        };
+        let (system_receipts, regular_receipts) =
+            if system_tx_count > 0 && system_tx_count <= receipts.len() {
+                let (sys, reg) = receipts
+                    .into_iter()
+                    .enumerate()
+                    .partition::<Vec<_>, _>(|(i, _)| *i < system_tx_count);
+                (
+                    sys.into_iter().map(|(_, r)| r).collect::<Vec<_>>(),
+                    reg.into_iter().map(|(_, r)| r).collect::<Vec<_>>(),
+                )
+            } else {
+                (vec![], receipts)
+            };
 
         // Convert system transactions
         let system_txs: Vec<SystemTx> = system_tx_list
@@ -110,22 +124,15 @@ impl BlockAndReceipts {
             .collect();
 
         // Convert regular transactions to reth_compat format
-        let compat_txs: Vec<reth_compat::TransactionSigned> = regular_tx_list
-            .into_iter()
-            .map(reth_compat::TransactionSigned::from_node_tx)
-            .collect();
+        let compat_txs: Vec<reth_compat::TransactionSigned> =
+            regular_tx_list.into_iter().map(reth_compat::TransactionSigned::from_node_tx).collect();
 
         // Convert regular receipts
-        let legacy_receipts: Vec<LegacyReceipt> = regular_receipts
-            .into_iter()
-            .map(Into::into)
-            .collect();
+        let legacy_receipts: Vec<LegacyReceipt> =
+            regular_receipts.into_iter().map(Into::into).collect();
 
         let sealed_block = reth_compat::SealedBlock {
-            header: reth_compat::SealedHeader {
-                hash,
-                header: block.header.inner,
-            },
+            header: reth_compat::SealedHeader { hash, header: block.header.inner },
             body: alloy_consensus::BlockBody {
                 transactions: compat_txs,
                 ommers: vec![],
