@@ -32,7 +32,10 @@ pub mod prelude {
 }
 
 use crate::chainspec::HlChainSpec;
+use reth_discv4::NodeRecord;
 use reth_network::{NetworkEvent, NetworkEventListenerProvider};
+use reth_network_api::Peers;
+use std::str::FromStr;
 
 /// Main function that starts the network manager and processes eth requests
 pub async fn start_pseudo_peer(
@@ -43,10 +46,13 @@ pub async fn start_pseudo_peer(
 ) -> eyre::Result<()> {
     let blockhash_cache = new_blockhash_cache();
 
-    // Create network manager
+    // Parse the destination peer enode string
+    let node_record = NodeRecord::from_str(&destination_peer)
+        .map_err(|e| eyre::eyre!("Failed to parse destination peer: {e}"))?;
+
+    // Create network manager (no boot_nodes — we add the peer directly)
     let (mut network, start_tx) = create_network_manager::<BlockSourceBoxed>(
         (*chain_spec).clone(),
-        destination_peer,
         block_source.clone(),
         blockhash_cache.clone(),
         debug_cutoff_height,
@@ -66,6 +72,15 @@ pub async fn start_pseudo_peer(
 
     let mut service = PseudoPeer::new(chain_spec, block_source, blockhash_cache.clone());
     tokio::spawn(network);
+
+    // Directly add the main node as a peer (bypasses discovery)
+    info!(
+        peer_id = %node_record.id,
+        addr = %node_record.tcp_addr(),
+        "Adding main node as direct peer"
+    );
+    network_handle.add_trusted_peer(node_record.id, node_record.tcp_addr());
+
     let mut first = true;
 
     // Main event loop
