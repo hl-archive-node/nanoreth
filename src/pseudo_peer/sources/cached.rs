@@ -2,7 +2,10 @@ use super::{BlockSource, BlockSourceBoxed};
 use crate::node::types::BlockAndReceipts;
 use futures::{FutureExt, future::BoxFuture};
 use reth_network::cache::LruMap;
-use std::{collections::HashMap, sync::{Arc, RwLock}};
+use std::{
+    collections::HashMap,
+    sync::{Arc, RwLock},
+};
 
 /// Block source wrapper that caches blocks in memory
 #[derive(Debug, Clone)]
@@ -77,11 +80,7 @@ impl BlockSource for CachedBlockSource {
             // Return in original order
             heights
                 .iter()
-                .map(|h| {
-                    cached
-                        .remove(h)
-                        .ok_or_else(|| eyre::eyre!("Block {h} not found"))
-                })
+                .map(|h| cached.remove(h).ok_or_else(|| eyre::eyre!("Block {h} not found")))
                 .collect()
         }
         .boxed()

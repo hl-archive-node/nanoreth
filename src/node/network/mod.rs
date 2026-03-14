@@ -9,7 +9,7 @@ use crate::{
         rpc::engine_api::payload::HlPayloadTypes,
         types::ReadPrecompileCalls,
     },
-    pseudo_peer::{BlockSourceConfig, start_pseudo_peer},
+    pseudo_peer::{BlockSourceConfig, DbBlockNumberFn, start_pseudo_peer},
 };
 use alloy_primitives::B256;
 use alloy_rlp::{Decodable, Encodable};
@@ -27,8 +27,8 @@ use reth_network::{NetworkConfig, NetworkHandle, NetworkManager};
 use reth_network_api::PeersInfo;
 use reth_payload_primitives::EngineApiMessageVersion;
 use reth_provider::StageCheckpointReader;
-use reth_storage_api::{BlockHashReader, BlockNumReader};
 use reth_stages_types::StageId;
+use reth_storage_api::{BlockHashReader, BlockNumReader};
 use std::{
     net::{Ipv4Addr, SocketAddr},
     sync::Arc,
@@ -267,8 +267,15 @@ where
                 .provider()
                 .get_stage_checkpoint(StageId::Finish)?
                 .unwrap_or_default()
-                .block_number
-                + 1;
+                .block_number +
+                1;
+
+            // Give the pseudo-peer a handle to the node's database so it can
+            // resolve hash→number directly instead of scanning the block source.
+            let provider = ctx.provider().clone();
+            let db_block_number: DbBlockNumberFn = Arc::new(move |hash| {
+                provider.block_number(hash).ok().flatten()
+            });
 
             let chain_spec = ctx.chain_spec();
             let chain_id = chain_spec.inner.chain().id();
@@ -284,8 +291,7 @@ where
                     match block_source.collect_block(latest).await {
                         Ok(block) => {
                             let reth_block = block.to_reth_block(chain_id);
-                            let hash =
-                                alloy_primitives::Sealable::hash_slow(&reth_block.header);
+                            let hash = alloy_primitives::Sealable::hash_slow(&reth_block.header);
                             info!(
                                 target: "reth::cli",
                                 number = %latest,
@@ -309,6 +315,7 @@ where
                     local_node_record.to_string(),
                     block_source,
                     debug_cutoff_height,
+                    Some(db_block_number),
                 )
                 .await
                 .unwrap();
