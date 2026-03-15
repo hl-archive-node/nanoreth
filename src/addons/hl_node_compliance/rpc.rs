@@ -28,7 +28,7 @@ use reth_provider::{BlockIdReader, BlockReader, BlockReaderIdExt, ReceiptProvide
 use reth_rpc::{EthFilter, EthPubSub};
 use reth_rpc_eth_api::{
     EthApiTypes, EthFilterApiServer, EthPubSubApiServer, RpcBlock, RpcConvert, RpcReceipt,
-    RpcTransaction, helpers::EthBlocks, transaction::ConvertReceiptInput,
+    RpcTransaction, helpers::{EthBlocks, EthTransactions}, transaction::ConvertReceiptInput,
 };
 use reth_rpc_eth_types::EthApiError;
 use serde::{Deserialize, Serialize};
@@ -37,6 +37,8 @@ use tokio_stream::StreamExt;
 use tracing::{Instrument, trace};
 
 use crate::addons::utils::{EthWrapper, new_headers_stream, pipe_from_stream};
+use http::Extensions;
+use super::layer::is_hl_compliant;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -385,46 +387,47 @@ fn adjust_log<Eth: EthWrapper>(mut log: Log, provider: &Eth::Provider) -> Option
 
 pub struct HlNodeBlockFilterHttp<Eth: EthWrapper> {
     eth_api: Arc<Eth>,
+    default_compliant: bool,
     _marker: PhantomData<Eth>,
 }
 
 impl<Eth: EthWrapper> HlNodeBlockFilterHttp<Eth> {
-    pub fn new(eth_api: Arc<Eth>) -> Self {
-        Self { eth_api, _marker: PhantomData }
+    pub fn new(eth_api: Arc<Eth>, default_compliant: bool) -> Self {
+        Self { eth_api, default_compliant, _marker: PhantomData }
     }
 }
 
 #[rpc(server, namespace = "eth")]
 pub trait EthBlockApi<B: RpcObject, R: RpcObject> {
     /// Returns information about a block by hash.
-    #[method(name = "getBlockByHash")]
+    #[method(name = "getBlockByHash", with_extensions)]
     async fn block_by_hash(&self, hash: B256, full: bool) -> RpcResult<Option<B>>;
 
     /// Returns information about a block by number.
-    #[method(name = "getBlockByNumber")]
+    #[method(name = "getBlockByNumber", with_extensions)]
     async fn block_by_number(&self, number: BlockNumberOrTag, full: bool) -> RpcResult<Option<B>>;
 
     /// Returns all transaction receipts for a given block.
-    #[method(name = "getBlockReceipts")]
+    #[method(name = "getBlockReceipts", with_extensions)]
     async fn block_receipts(&self, block_id: BlockId) -> RpcResult<Option<Vec<R>>>;
 
     /// Returns all transaction receipts for a given block, including system transactions.
-    #[method(name = "getBlockReceiptsWithSystemTx")]
+    #[method(name = "getBlockReceiptsWithSystemTx", with_extensions)]
     async fn block_receipts_with_system_tx(
         &self,
         block_id: BlockId,
     ) -> RpcResult<Option<BlockReceiptsWithSystemTx<R>>>;
 
-    #[method(name = "getBlockTransactionCountByHash")]
+    #[method(name = "getBlockTransactionCountByHash", with_extensions)]
     async fn block_transaction_count_by_hash(&self, hash: B256) -> RpcResult<Option<U256>>;
 
-    #[method(name = "getBlockTransactionCountByNumber")]
+    #[method(name = "getBlockTransactionCountByNumber", with_extensions)]
     async fn block_transaction_count_by_number(
         &self,
         number: BlockNumberOrTag,
     ) -> RpcResult<Option<U256>>;
 
-    #[method(name = "getTransactionReceipt")]
+    #[method(name = "getTransactionReceipt", with_extensions)]
     async fn transaction_receipt(&self, hash: B256) -> RpcResult<Option<R>>;
 }
 
@@ -631,39 +634,58 @@ where
     /// Handler for: `eth_getBlockByHash`
     async fn block_by_hash(
         &self,
+        ext: &Extensions,
         hash: B256,
         full: bool,
     ) -> RpcResult<Option<RpcBlock<Eth::NetworkTypes>>> {
         let res = self.eth_api.block_by_hash(hash, full).instrument(engine_span!()).await?;
-        Ok(res.map(|block| adjust_block(&block, &*self.eth_api)))
+        if is_hl_compliant(ext, self.default_compliant) {
+            Ok(res.map(|block| adjust_block(&block, &*self.eth_api)))
+        } else {
+            Ok(res)
+        }
     }
 
     /// Handler for: `eth_getBlockByNumber`
     async fn block_by_number(
         &self,
+        ext: &Extensions,
         number: BlockNumberOrTag,
         full: bool,
     ) -> RpcResult<Option<RpcBlock<Eth::NetworkTypes>>> {
         trace!(target: "rpc::eth", ?number, ?full, "Serving eth_getBlockByNumber");
         let res = self.eth_api.block_by_number(number, full).instrument(engine_span!()).await?;
-        Ok(res.map(|block| adjust_block(&block, &*self.eth_api)))
+        if is_hl_compliant(ext, self.default_compliant) {
+            Ok(res.map(|block| adjust_block(&block, &*self.eth_api)))
+        } else {
+            Ok(res)
+        }
     }
 
     /// Handler for: `eth_getBlockTransactionCountByHash`
-    async fn block_transaction_count_by_hash(&self, hash: B256) -> RpcResult<Option<U256>> {
+    async fn block_transaction_count_by_hash(
+        &self,
+        ext: &Extensions,
+        hash: B256,
+    ) -> RpcResult<Option<U256>> {
         trace!(target: "rpc::eth", ?hash, "Serving eth_getBlockTransactionCountByHash");
         let res =
             self.eth_api.block_transaction_count_by_hash(hash).instrument(engine_span!()).await?;
-        Ok(res.map(|count| {
-            let sys_tx_count =
-                system_tx_count_for_block(&*self.eth_api, BlockId::Hash(hash.into()));
-            count - U256::from(sys_tx_count)
-        }))
+        if is_hl_compliant(ext, self.default_compliant) {
+            Ok(res.map(|count| {
+                let sys_tx_count =
+                    system_tx_count_for_block(&*self.eth_api, BlockId::Hash(hash.into()));
+                count - U256::from(sys_tx_count)
+            }))
+        } else {
+            Ok(res)
+        }
     }
 
     /// Handler for: `eth_getBlockTransactionCountByNumber`
     async fn block_transaction_count_by_number(
         &self,
+        ext: &Extensions,
         number: BlockNumberOrTag,
     ) -> RpcResult<Option<U256>> {
         trace!(target: "rpc::eth", ?number, "Serving eth_getBlockTransactionCountByNumber");
@@ -672,37 +694,56 @@ where
             .block_transaction_count_by_number(number)
             .instrument(engine_span!())
             .await?;
-        Ok(res.map(|count| {
-            count - U256::from(system_tx_count_for_block(&*self.eth_api, number.into()))
-        }))
+        if is_hl_compliant(ext, self.default_compliant) {
+            Ok(res.map(|count| {
+                count - U256::from(system_tx_count_for_block(&*self.eth_api, number.into()))
+            }))
+        } else {
+            Ok(res)
+        }
     }
 
     async fn transaction_receipt(
         &self,
+        ext: &Extensions,
         hash: B256,
     ) -> RpcResult<Option<RpcReceipt<Eth::NetworkTypes>>> {
         trace!(target: "rpc::eth", ?hash, "Serving eth_getTransactionReceipt");
-        let eth_api = &*self.eth_api;
-        Ok(adjust_transaction_receipt(hash, eth_api).instrument(engine_span!()).await?)
+        if is_hl_compliant(ext, self.default_compliant) {
+            let eth_api = &*self.eth_api;
+            Ok(adjust_transaction_receipt(hash, eth_api).instrument(engine_span!()).await?)
+        } else {
+            Ok(EthTransactions::transaction_receipt(&*self.eth_api, hash)
+                .instrument(engine_span!())
+                .await?)
+        }
     }
 
     /// Handler for: `eth_getBlockReceipts`
     async fn block_receipts(
         &self,
+        ext: &Extensions,
         block_id: BlockId,
     ) -> RpcResult<Option<Vec<RpcReceipt<Eth::NetworkTypes>>>> {
         trace!(target: "rpc::eth", ?block_id, "Serving eth_getBlockReceipts");
         if self.eth_api.provider().block_by_id(block_id).map_err(EthApiError::from)?.is_none() {
             return Ok(None);
         }
-        let result =
-            adjust_block_receipts(block_id, &*self.eth_api).instrument(engine_span!()).await?;
-        Ok(result.map(|(_, receipts)| receipts))
+        if is_hl_compliant(ext, self.default_compliant) {
+            let result =
+                adjust_block_receipts(block_id, &*self.eth_api).instrument(engine_span!()).await?;
+            Ok(result.map(|(_, receipts)| receipts))
+        } else {
+            Ok(EthBlocks::block_receipts(&*self.eth_api, block_id)
+                .instrument(engine_span!())
+                .await?)
+        }
     }
 
     /// Handler for: `eth_getBlockReceiptsWithSystemTx`
     async fn block_receipts_with_system_tx(
         &self,
+        _ext: &Extensions,
         block_id: BlockId,
     ) -> RpcResult<Option<BlockReceiptsWithSystemTx<RpcReceipt<Eth::NetworkTypes>>>> {
         trace!(target: "rpc::eth", ?block_id, "Serving eth_getBlockReceiptsWithSystemTx");
@@ -716,8 +757,9 @@ where
     }
 }
 
-pub fn install_hl_node_compliance<Node, EthApi>(
+pub fn install<Node, EthApi>(
     ctx: &mut RpcContext<Node, EthApi>,
+    default_compliant: bool,
 ) -> Result<(), eyre::Error>
 where
     Node: FullNodeComponents,
@@ -725,24 +767,27 @@ where
     EthApi: EthWrapper,
     ErrorObject<'static>: From<EthApi::Error>,
 {
-    ctx.modules.replace_configured(
-        HlNodeFilterHttp::new(
-            Arc::new(ctx.registry.eth_handlers().filter.clone()),
-            Arc::new(ctx.registry.eth_api().provider().clone()),
-        )
-        .into_rpc(),
-    )?;
-    ctx.modules.replace_configured(
-        HlNodeFilterWs::new(
-            Arc::new(ctx.registry.eth_handlers().pubsub.clone()),
-            Arc::new(ctx.registry.eth_api().provider().clone()),
-            Box::new(ctx.node().task_executor().clone()),
-        )
-        .into_rpc(),
-    )?;
+    if default_compliant {
+        ctx.modules.replace_configured(
+            HlNodeFilterHttp::new(
+                Arc::new(ctx.registry.eth_handlers().filter.clone()),
+                Arc::new(ctx.registry.eth_api().provider().clone()),
+            )
+            .into_rpc(),
+        )?;
+        ctx.modules.replace_configured(
+            HlNodeFilterWs::new(
+                Arc::new(ctx.registry.eth_handlers().pubsub.clone()),
+                Arc::new(ctx.registry.eth_api().provider().clone()),
+                Box::new(ctx.node().task_executor().clone()),
+            )
+            .into_rpc(),
+        )?;
+    }
 
     ctx.modules.replace_configured(
-        HlNodeBlockFilterHttp::new(Arc::new(ctx.registry.eth_api().clone())).into_rpc(),
+        HlNodeBlockFilterHttp::new(Arc::new(ctx.registry.eth_api().clone()), default_compliant)
+            .into_rpc(),
     )?;
 
     ctx.modules
