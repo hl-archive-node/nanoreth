@@ -1,4 +1,4 @@
-use super::{sources::BlockSource, utils::LruBiMap};
+use super::block_store::BlockStore;
 use crate::{
     chainspec::HlChainSpec,
     node::{
@@ -7,8 +7,7 @@ use crate::{
     },
 };
 use alloy_eips::HashOrNumber;
-use alloy_primitives::{B256, U128};
-use parking_lot::RwLock;
+use alloy_primitives::U128;
 use rayon::prelude::*;
 use reth_eth_wire::{
     BlockBodies, BlockHeaders, GetBlockBodies, GetBlockHeaders, HeadersDirection, NewBlock,
@@ -27,35 +26,26 @@ use std::{
 use tokio::{sync::mpsc, task::JoinHandle};
 use tracing::{debug, info, warn};
 
-/// A cache of block hashes to block numbers.
-pub type BlockHashCache = Arc<RwLock<LruBiMap<B256, u64>>>;
-const BLOCKHASH_CACHE_LIMIT: u32 = 1_000_000;
-
-pub fn new_blockhash_cache() -> BlockHashCache {
-    Arc::new(RwLock::new(LruBiMap::new(BLOCKHASH_CACHE_LIMIT)))
-}
-
-/// A block poller that polls blocks from `BlockSource` and sends them to the `block_tx`
+/// A block poller that polls blocks from `BlockStore` and sends them to the `block_tx`
 #[derive(Debug)]
 pub struct BlockPoller {
     chain_id: u64,
     block_rx: mpsc::Receiver<(u64, BlockAndReceipts)>,
     task: JoinHandle<eyre::Result<()>>,
-    blockhash_cache: BlockHashCache,
+    block_store: Arc<BlockStore>,
 }
 
 impl BlockPoller {
-    pub fn new_suspended<BS: BlockSource>(
+    pub fn new_suspended(
         chain_id: u64,
-        block_source: BS,
-        blockhash_cache: BlockHashCache,
+        block_store: Arc<BlockStore>,
         debug_cutoff_height: Option<u64>,
     ) -> (Self, mpsc::Sender<()>) {
-        let block_source = Arc::new(block_source);
         let (start_tx, start_rx) = mpsc::channel(1);
         let (block_tx, block_rx) = mpsc::channel(100);
-        let task = tokio::spawn(Self::task(start_rx, block_source, block_tx, debug_cutoff_height));
-        (Self { chain_id, block_rx, task, blockhash_cache: blockhash_cache.clone() }, start_tx)
+        let store = block_store.clone();
+        let task = tokio::spawn(Self::task(start_rx, store, block_tx, debug_cutoff_height));
+        (Self { chain_id, block_rx, task, block_store }, start_tx)
     }
 
     #[allow(unused)]
@@ -63,17 +53,17 @@ impl BlockPoller {
         &self.task
     }
 
-    async fn task<BS: BlockSource>(
+    async fn task(
         mut start_rx: mpsc::Receiver<()>,
-        block_source: Arc<BS>,
+        block_store: Arc<BlockStore>,
         block_tx: mpsc::Sender<(u64, BlockAndReceipts)>,
         debug_cutoff_height: Option<u64>,
     ) -> eyre::Result<()> {
         start_rx.recv().await.ok_or(eyre::eyre!("Failed to receive start signal"))?;
         info!("Starting block poller");
 
-        let polling_interval = block_source.polling_interval();
-        let mut next_block_number = block_source
+        let polling_interval = block_store.polling_interval();
+        let mut next_block_number = block_store
             .find_latest_block_number()
             .await
             .ok_or(eyre::eyre!("Failed to find latest block number"))?;
@@ -85,7 +75,7 @@ impl BlockPoller {
                 next_block_number = debug_cutoff_height;
             }
 
-            match block_source.collect_block(next_block_number).await {
+            match block_store.get_by_number(next_block_number).await {
                 Ok(block) => {
                     block_tx.send((next_block_number, block)).await?;
                     next_block_number += 1;
@@ -102,9 +92,9 @@ impl BlockImport<HlNewBlock> for BlockPoller {
         match Pin::new(&mut self.block_rx).poll_recv(_cx) {
             Poll::Ready(Some((number, block))) => {
                 debug!("Polled block: {}", number);
+                self.block_store.index_block(&block);
                 let reth_block = block.to_reth_block(self.chain_id);
                 let hash = reth_block.header.hash_slow();
-                self.blockhash_cache.write().insert(hash, number);
                 let td = U128::from(reth_block.header.difficulty);
                 Poll::Ready(BlockImportEvent::Announcement(BlockValidation::ValidHeader {
                     block: NewBlockMessage {
@@ -120,35 +110,15 @@ impl BlockImport<HlNewBlock> for BlockPoller {
     fn on_new_block(&mut self, _peer_id: PeerId, _incoming_block: NewBlockEvent<HlNewBlock>) {}
 }
 
-/// Function that resolves a block hash to its number via the node's database.
-/// Returns `None` if the hash is not yet in the database (e.g. headers not synced yet).
-pub type DbBlockNumberFn = Arc<dyn Fn(B256) -> Option<u64> + Send + Sync>;
-
 /// A pseudo peer that can process eth requests and feed blocks to reth
-pub struct PseudoPeer<BS: BlockSource> {
+pub struct PseudoPeer {
     chain_spec: Arc<HlChainSpec>,
-    block_source: BS,
-    blockhash_cache: BlockHashCache,
-
-    /// Database lookup for hash→number resolution.
-    /// Reads directly from the node's header database, avoiding expensive
-    /// block source scans.
-    db_block_number: Option<DbBlockNumberFn>,
+    block_store: Arc<BlockStore>,
 }
 
-impl<BS: BlockSource> PseudoPeer<BS> {
-    pub fn new(
-        chain_spec: Arc<HlChainSpec>,
-        block_source: BS,
-        blockhash_cache: BlockHashCache,
-        db_block_number: Option<DbBlockNumberFn>,
-    ) -> Self {
-        Self {
-            chain_spec,
-            block_source,
-            blockhash_cache,
-            db_block_number,
-        }
+impl PseudoPeer {
+    pub fn new(chain_spec: Arc<HlChainSpec>, block_store: Arc<BlockStore>) -> Self {
+        Self { chain_spec, block_store }
     }
 
     async fn collect_blocks(
@@ -156,7 +126,7 @@ impl<BS: BlockSource> PseudoPeer<BS> {
         block_numbers: impl IntoIterator<Item = u64>,
     ) -> eyre::Result<Vec<BlockAndReceipts>> {
         let block_numbers = block_numbers.into_iter().collect::<Vec<_>>();
-        self.block_source.collect_blocks(block_numbers).await
+        self.block_store.get_by_numbers(block_numbers).await
     }
 
     pub async fn process_eth_request(
@@ -174,7 +144,7 @@ impl<BS: BlockSource> PseudoPeer<BS> {
                     "GetBlockHeaders request: {start_block:?}, {limit:?}, {skip:?}, {direction:?}"
                 );
                 let number = match start_block {
-                    HashOrNumber::Hash(hash) => match self.hash_to_block_number(hash).await {
+                    HashOrNumber::Hash(hash) => match self.block_store.hash_to_number(hash) {
                         Ok(n) => n,
                         Err(e) => {
                             warn!("Failed to resolve block hash {hash:?}: {e}");
@@ -192,21 +162,16 @@ impl<BS: BlockSource> PseudoPeer<BS> {
                     }
                 }?;
 
-                // Cache hash→number mappings so the Bodies stage can resolve them later
+                // collect_blocks auto-indexes hashes via BlockStore
                 let block_headers: Vec<_> = blocks
                     .into_par_iter()
                     .map(|block| {
-                        let number = block.number();
                         let reth_block = block.to_reth_block(chain_id);
-                        let hash = reth_block.header.hash_slow();
-                        (hash, number, reth_block.header.clone())
+                        reth_block.header.clone()
                     })
                     .collect();
 
-                self.cache_blocks(block_headers.iter().map(|(hash, number, _)| (*hash, *number)));
-
-                let headers = block_headers.into_iter().map(|(_, _, h)| h).collect();
-                let _ = response.send(Ok(BlockHeaders(headers)));
+                let _ = response.send(Ok(BlockHeaders(block_headers)));
             }
             IncomingEthRequest::GetBlockBodies { peer_id: _, request, response } => {
                 let GetBlockBodies(hashes) = request;
@@ -214,7 +179,7 @@ impl<BS: BlockSource> PseudoPeer<BS> {
 
                 let mut numbers = Vec::new();
                 for hash in hashes {
-                    match self.hash_to_block_number(hash).await {
+                    match self.block_store.hash_to_number(hash) {
                         Ok(n) => numbers.push(n),
                         Err(e) => warn!("Failed to resolve block hash {hash:?}: {e}"),
                     }
@@ -233,30 +198,5 @@ impl<BS: BlockSource> PseudoPeer<BS> {
             eth_req => debug!("New eth protocol request: {eth_req:?}"),
         }
         Ok(())
-    }
-
-    async fn hash_to_block_number(&self, hash: B256) -> eyre::Result<u64> {
-        // Fast path: check in-memory cache
-        if let Some(block_number) = self.blockhash_cache.read().get_by_left(&hash).copied() {
-            return Ok(block_number);
-        }
-
-        // Look up in the node's database (all headers are stored after the Headers stage)
-        if let Some(ref db_fn) = self.db_block_number
-            && let Some(block_number) = db_fn(hash)
-        {
-            self.cache_blocks([(hash, block_number)]);
-            return Ok(block_number);
-        }
-
-        Err(eyre::eyre!("Hash not found in cache or database: {hash:?}"))
-    }
-
-    /// Cache a collection of blocks in the hash-to-number mapping
-    fn cache_blocks(&self, blocks: impl IntoIterator<Item = (B256, u64)>) {
-        let mut map = self.blockhash_cache.write();
-        for (hash, number) in blocks {
-            map.insert(hash, number);
-        }
     }
 }

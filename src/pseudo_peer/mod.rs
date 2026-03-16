@@ -3,6 +3,7 @@
 //! This library exposes `start_pseudo_peer` to support reth-side NetworkState/StateFetcher
 //! to fetch blocks and feed it to its stages
 
+pub mod block_store;
 pub mod cli;
 pub mod config;
 pub mod network;
@@ -14,6 +15,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{error, info};
 
+pub use block_store::*;
 pub use cli::*;
 pub use config::*;
 pub use network::*;
@@ -23,11 +25,10 @@ pub use sources::*;
 /// Re-export commonly used types
 pub mod prelude {
     pub use super::{
+        block_store::BlockStore,
         config::BlockSourceConfig,
         service::{BlockPoller, PseudoPeer},
-        sources::{
-            BlockSource, CachedBlockSource, LocalBlockSource, RpcBlockSource, S3BlockSource,
-        },
+        sources::{BlockSource, LocalBlockSource, RpcBlockSource, S3BlockSource},
     };
 }
 
@@ -41,21 +42,18 @@ use std::str::FromStr;
 pub async fn start_pseudo_peer(
     chain_spec: Arc<HlChainSpec>,
     destination_peer: String,
-    block_source: BlockSourceBoxed,
+    block_store: Arc<BlockStore>,
     debug_cutoff_height: Option<u64>,
-    db_block_number: Option<DbBlockNumberFn>,
 ) -> eyre::Result<()> {
-    let blockhash_cache = new_blockhash_cache();
 
     // Parse the destination peer enode string
     let node_record = NodeRecord::from_str(&destination_peer)
         .map_err(|e| eyre::eyre!("Failed to parse destination peer: {e}"))?;
 
     // Create network manager (no boot_nodes — we add the peer directly)
-    let (mut network, start_tx) = create_network_manager::<BlockSourceBoxed>(
+    let (mut network, start_tx) = create_network_manager(
         (*chain_spec).clone(),
-        block_source.clone(),
-        blockhash_cache.clone(),
+        block_store.clone(),
         debug_cutoff_height,
     )
     .await?;
@@ -71,8 +69,7 @@ pub async fn start_pseudo_peer(
     let mut network_events = network_handle.event_listener();
     info!("Starting network manager...");
 
-    let mut service =
-        PseudoPeer::new(chain_spec, block_source, blockhash_cache.clone(), db_block_number);
+    let mut service = PseudoPeer::new(chain_spec, block_store);
     tokio::spawn(network);
 
     // Directly add the main node as a peer (bypasses discovery)

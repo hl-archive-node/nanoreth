@@ -1,8 +1,11 @@
 use crate::chainspec::HlChainSpec;
 
-use super::sources::{
-    BlockSourceBoxed, CachedBlockSource, HlNodeBlockSource, HlNodeBlockSourceArgs,
-    LocalBlockSource, RpcBlockSource, S3BlockSource,
+use super::{
+    block_store::{BlockStore, DbBlockNumberFn},
+    sources::{
+        BlockSourceBoxed, HlNodeBlockSource, HlNodeBlockSourceArgs,
+        LocalBlockSource, RpcBlockSource, S3BlockSource,
+    },
 };
 use aws_config::BehaviorVersion;
 use std::{env::home_dir, path::PathBuf, sync::Arc, time::Duration};
@@ -104,15 +107,16 @@ impl BlockSourceConfig {
         ))
     }
 
-    pub async fn create_cached_block_source(
+    pub async fn create_block_store(
         &self,
         chain_spec: HlChainSpec,
         next_block_number: u64,
-    ) -> BlockSourceBoxed {
+        db_block_number: Option<DbBlockNumberFn>,
+    ) -> Arc<BlockStore> {
         let block_source = self.create_block_source(chain_spec).await;
         let block_source =
             self.create_block_source_from_node(next_block_number, block_source).await;
-        Arc::new(Box::new(CachedBlockSource::new(block_source)))
+        Arc::new(BlockStore::new(block_source, db_block_number))
     }
 }
 

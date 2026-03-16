@@ -158,6 +158,11 @@ impl BlockAndReceipts {
         let EvmBlock::Reth115(block) = &self.block;
         block.header.header.number
     }
+
+    pub fn parent_hash(&self) -> B256 {
+        let EvmBlock::Reth115(block) = &self.block;
+        block.header.header.parent_hash
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]

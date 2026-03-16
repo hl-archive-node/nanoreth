@@ -28,7 +28,7 @@ use reth_network_api::PeersInfo;
 use reth_payload_primitives::EngineApiMessageVersion;
 use reth_provider::StageCheckpointReader;
 use reth_stages_types::StageId;
-use reth_storage_api::{BlockHashReader, BlockNumReader};
+use reth_storage_api::BlockNumReader;
 use std::{
     net::{Ipv4Addr, SocketAddr},
     sync::Arc,
@@ -188,21 +188,18 @@ impl HlNetworkBuilder {
             // the pseudo peer's NewBlock announcements via the network layer don't
             // reliably generate forkchoice updates on this post-merge chain.
             if let Ok(target_hash) = fcu_trigger_rx.await {
-                let finalized_hash = consensus
-                    .provider
-                    .best_block_number()
-                    .ok()
-                    .and_then(|n| consensus.provider.block_hash(n).ok().flatten())
-                    .unwrap_or(target_hash);
+                // Use the target hash as finalized so reth's backfill_sync_target()
+                // sees an unknown finalized hash and triggers the pipeline.
+                // If finalized is set to the current best block (which is already
+                // known), reth concludes "fully synced" and never starts backfill.
                 let state = ForkchoiceState {
                     head_block_hash: target_hash,
-                    safe_block_hash: finalized_hash,
-                    finalized_block_hash: finalized_hash,
+                    safe_block_hash: target_hash,
+                    finalized_block_hash: target_hash,
                 };
                 info!(
                     target: "reth::cli",
                     head = %target_hash,
-                    finalized = %finalized_hash,
                     "Sending initial forkchoice update to trigger pipeline"
                 );
                 let _ = engine
@@ -270,7 +267,7 @@ where
                 .block_number +
                 1;
 
-            // Give the pseudo-peer a handle to the node's database so it can
+            // Give the block store a handle to the node's database so it can
             // resolve hash→number directly instead of scanning the block source.
             let provider = ctx.provider().clone();
             let db_block_number: DbBlockNumberFn = Arc::new(move |hash| {
@@ -278,20 +275,23 @@ where
             });
 
             let chain_spec = ctx.chain_spec();
-            let chain_id = chain_spec.inner.chain().id();
             ctx.task_executor().spawn_critical("pseudo peer", async move {
-                let block_source = block_source_config
-                    .create_cached_block_source((*chain_spec).clone(), next_block_number)
+                let block_store = block_source_config
+                    .create_block_store(
+                        (*chain_spec).clone(),
+                        next_block_number,
+                        Some(db_block_number),
+                    )
                     .await;
 
                 // Read the latest block and send its hash to trigger the pipeline
                 // via a direct forkchoice update. This must happen before
                 // start_pseudo_peer (which never returns).
-                if let Some(latest) = block_source.find_latest_block_number().await {
-                    match block_source.collect_block(latest).await {
+                // get_by_number auto-indexes the block's hash AND parent hash.
+                if let Some(latest) = block_store.find_latest_block_number().await {
+                    match block_store.get_by_number(latest).await {
                         Ok(block) => {
-                            let reth_block = block.to_reth_block(chain_id);
-                            let hash = alloy_primitives::Sealable::hash_slow(&reth_block.header);
+                            let hash = block.hash();
                             info!(
                                 target: "reth::cli",
                                 number = %latest,
@@ -313,9 +313,8 @@ where
                 start_pseudo_peer(
                     chain_spec.clone(),
                     local_node_record.to_string(),
-                    block_source,
+                    block_store,
                     debug_cutoff_height,
-                    Some(db_block_number),
                 )
                 .await
                 .unwrap();
