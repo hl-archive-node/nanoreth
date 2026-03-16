@@ -11,7 +11,25 @@ Deposit transactions from [System Addresses](https://hyperliquid.gitbook.io/hype
 This change simplifies block explorers, making it easier to track deposit timestamps.
 Ensure careful handling when indexing.
 
-To disable this behavior, add --hl-node-compliant to the CLI arguments-this will not show system transactions and their receipts, mimicking hl-node's output.
+To disable this behavior, add `--hl-node-compliant` to the CLI arguments-this will not show system transactions and their receipts, mimicking hl-node's output.
+
+### Per-request compliance multiplexing
+
+If you need a single endpoint to serve both filtered and unfiltered responses, use `--hl-node-compliant-multiplexed`. This adds a middleware layer that reads the `?hl=` query parameter from each request:
+
+- `?hl=true` or `?hl=1` — apply HL compliance filtering (hide system transactions)
+- `?hl=false` — disable filtering (show all transactions)
+- No parameter — falls back to the `--hl-node-compliant` flag (default: unfiltered)
+
+```sh
+reth-hl node --hl-node-compliant-multiplexed --hl-node-compliant \
+  --http --http.addr 0.0.0.0 --http.api eth,ots,net,web3 --s3
+
+# Then query with per-request control:
+# curl http://localhost:8545?hl=true   # filtered
+# curl http://localhost:8545?hl=false  # unfiltered
+# curl http://localhost:8545           # uses --hl-node-compliant default
+```
 
 ## Prerequisites
 
