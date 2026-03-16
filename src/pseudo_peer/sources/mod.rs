@@ -4,7 +4,6 @@ use futures::{FutureExt, StreamExt, future::BoxFuture};
 use std::{sync::Arc, time::Duration};
 
 // Module declarations
-mod cached;
 mod hl_node;
 mod local;
 mod rpc;
@@ -12,7 +11,6 @@ mod s3;
 mod utils;
 
 // Public exports
-pub use cached::CachedBlockSource;
 pub use hl_node::{HlNodeBlockSource, HlNodeBlockSourceArgs};
 pub use local::LocalBlockSource;
 pub use rpc::RpcBlockSource;
