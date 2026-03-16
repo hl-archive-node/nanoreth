@@ -105,6 +105,38 @@ impl BlockSource for S3BlockSource {
         .boxed()
     }
 
+    /// Uses `tokio::spawn` batches instead of the default `buffered()` stream.
+    /// This distributes response processing across the runtime's thread pool,
+    /// avoiding the single-task polling bottleneck (~10x faster on fast networks).
+    fn collect_blocks(
+        &self,
+        heights: Vec<u64>,
+    ) -> BoxFuture<'static, eyre::Result<Vec<BlockAndReceipts>>> {
+        let concurrency = self.recommended_chunk_size() as usize;
+        let futs: Vec<_> = heights
+            .into_iter()
+            .map(|h| self.collect_block(h))
+            .collect();
+        async move {
+            let mut results = Vec::with_capacity(futs.len());
+            let mut futs = futs.into_iter();
+            loop {
+                let batch: Vec<_> = (&mut futs)
+                    .take(concurrency)
+                    .map(|fut| tokio::spawn(fut))
+                    .collect();
+                if batch.is_empty() {
+                    break;
+                }
+                for handle in batch {
+                    results.push(handle.await.map_err(|e| eyre::eyre!(e))??);
+                }
+            }
+            Ok(results)
+        }
+        .boxed()
+    }
+
     fn recommended_chunk_size(&self) -> u64 {
         1000
     }
