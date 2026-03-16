@@ -28,7 +28,7 @@ use reth_network_api::PeersInfo;
 use reth_payload_primitives::EngineApiMessageVersion;
 use reth_provider::StageCheckpointReader;
 use reth_stages_types::StageId;
-use reth_storage_api::{BlockHashReader, BlockNumReader};
+use reth_storage_api::BlockNumReader;
 use std::{
     net::{Ipv4Addr, SocketAddr},
     sync::Arc,
@@ -188,21 +188,18 @@ impl HlNetworkBuilder {
             // the pseudo peer's NewBlock announcements via the network layer don't
             // reliably generate forkchoice updates on this post-merge chain.
             if let Ok(target_hash) = fcu_trigger_rx.await {
-                let finalized_hash = consensus
-                    .provider
-                    .best_block_number()
-                    .ok()
-                    .and_then(|n| consensus.provider.block_hash(n).ok().flatten())
-                    .unwrap_or(target_hash);
+                // Use the target hash as finalized so reth's backfill_sync_target()
+                // sees an unknown finalized hash and triggers the pipeline.
+                // If finalized is set to the current best block (which is already
+                // known), reth concludes "fully synced" and never starts backfill.
                 let state = ForkchoiceState {
                     head_block_hash: target_hash,
-                    safe_block_hash: finalized_hash,
-                    finalized_block_hash: finalized_hash,
+                    safe_block_hash: target_hash,
+                    finalized_block_hash: target_hash,
                 };
                 info!(
                     target: "reth::cli",
                     head = %target_hash,
-                    finalized = %finalized_hash,
                     "Sending initial forkchoice update to trigger pipeline"
                 );
                 let _ = engine
