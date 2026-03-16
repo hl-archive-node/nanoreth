@@ -59,6 +59,14 @@ pub struct HlNodeArgs {
     #[arg(long, env = "HL_NODE_COMPLIANT")]
     pub hl_node_compliant: bool,
 
+    /// Enable per-request HL compliance mode via `?hl=true` or `?hl=false` query parameter.
+    ///
+    /// When enabled, the HTTP RPC server is restarted with a middleware layer that reads
+    /// the `hl` query parameter from each request. The `--hl-node-compliant` flag controls
+    /// the default behavior when no query parameter is provided (defaults to no filtering).
+    #[arg(long, env = "HL_NODE_COMPLIANT_MULTIPLEXED")]
+    pub hl_node_compliant_multiplexed: bool,
+
     /// Forward eth_call and eth_estimateGas to the upstream RPC.
     ///
     /// This is useful when read precompile is needed for gas estimation.

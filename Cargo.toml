@@ -69,6 +69,9 @@ reth-rpc-convert = { git = "https://github.com/hl-archive-node/reth", rev = "416
 reth-rpc-eth-types = { git = "https://github.com/hl-archive-node/reth", rev = "416c2e26756f1c8ee86e6b8e4081f434952b3a1a" }
 reth-rpc-server-types = { git = "https://github.com/hl-archive-node/reth", rev = "416c2e26756f1c8ee86e6b8e4081f434952b3a1a" }
 reth-metrics = { git = "https://github.com/hl-archive-node/reth", rev = "416c2e26756f1c8ee86e6b8e4081f434952b3a1a" }
+reth-rpc-builder = { git = "https://github.com/hl-archive-node/reth", rev = "416c2e26756f1c8ee86e6b8e4081f434952b3a1a" }
+reth-ipc = { git = "https://github.com/hl-archive-node/reth", rev = "416c2e26756f1c8ee86e6b8e4081f434952b3a1a" }
+reth-rpc-layer = { git = "https://github.com/hl-archive-node/reth", rev = "416c2e26756f1c8ee86e6b8e4081f434952b3a1a" }
 revm = { version = "29.0.1", default-features = false }
 
 # alloy dependencies
@@ -120,6 +123,9 @@ aws-config = "1.8.0"
 rayon = "1.7"
 time = "0.3.41"
 rangemap = "=1.6.0"
+http = "1"
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors"] }
 
 
 [target.'cfg(unix)'.dependencies]

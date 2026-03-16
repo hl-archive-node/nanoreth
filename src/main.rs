@@ -9,7 +9,7 @@ use reth_db::DatabaseEnv;
 use reth_hl::{
     addons::{
         call_forwarder::{self, CallForwarderApiServer},
-        hl_node_compliance::install_hl_node_compliance,
+        hl_node_compliance::{self, server_restart},
         subscribe_fixup::SubscribeFixup,
         sync_server::{HlSyncApiServer, HlSyncServer, ProviderSyncReader, set_sync_db_reader},
         tx_forwarder::{self, EthForwarderApiServer},
@@ -31,6 +31,14 @@ use tracing::info;
 #[global_allocator]
 static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
+/// Methods captured from reth's RPC module setup, used to restart the server
+/// with the HL compliance HTTP middleware layer.
+struct CapturedMethods {
+    http: Option<jsonrpsee::Methods>,
+    ws: Option<jsonrpsee::Methods>,
+    ipc: Option<jsonrpsee::Methods>,
+}
+
 fn main() -> eyre::Result<()> {
     reth_cli_util::sigsegv_handler::install();
 
@@ -43,6 +51,14 @@ fn main() -> eyre::Result<()> {
             let default_upstream_rpc_url = builder.config().chain.official_rpc_url();
 
             let enable_sync_server = ext.enable_sync_server;
+            let hl_node_compliant_default = ext.hl_node_compliant;
+            let hl_multiplexed = ext.hl_node_compliant_multiplexed;
+
+            // Shared state to shuttle captured methods between hooks (only used in multiplexed mode)
+            let captured: Arc<std::sync::Mutex<CapturedMethods>> =
+                Arc::new(std::sync::Mutex::new(CapturedMethods { http: None, ws: None, ipc: None }));
+            let captured_for_restart = captured.clone();
+
             let (node, engine_handle_tx) = HlNode::new(
                 ext.block_source_args.parse().await?,
                 ext.debug_cutoff_height,
@@ -81,8 +97,14 @@ fn main() -> eyre::Result<()> {
                         .into_rpc(),
                     )?;
 
-                    if ext.hl_node_compliant {
-                        install_hl_node_compliance(&mut ctx)?;
+                    if hl_multiplexed {
+                        // Multiplexed: install per-request-aware handlers.
+                        // --hl-node-compliant controls the default when ?hl= is absent.
+                        hl_node_compliance::install(&mut ctx, hl_node_compliant_default)?;
+                        info!("hl-node compliant multiplexed mode enabled");
+                    } else if hl_node_compliant_default {
+                        // Original behavior: unconditional filtering
+                        hl_node_compliance::install(&mut ctx, true)?;
                         info!("hl-node compliant mode enabled");
                     }
 
@@ -101,6 +123,43 @@ fn main() -> eyre::Result<()> {
                     ctx.modules.merge_configured(
                         HlBlockPrecompileExt::new(ctx.registry.eth_api().clone()).into_rpc(),
                     )?;
+
+                    // Capture methods for server restart (only in multiplexed mode)
+                    if hl_multiplexed {
+                        let mut cap = captured.lock().unwrap();
+                        cap.http = ctx.modules.http_methods(|_| true);
+                        cap.ws = ctx.modules.ws_methods(|_| true);
+                        cap.ipc = ctx.modules.ipc_methods(|_| true);
+                    }
+
+                    Ok(())
+                })
+                .on_rpc_started(move |ctx, handles| {
+                    if !hl_multiplexed {
+                        return Ok(());
+                    }
+
+                    let CapturedMethods { http, ws, ipc } = std::mem::replace(
+                        &mut *captured_for_restart.lock().unwrap(),
+                        CapturedMethods { http: None, ws: None, ipc: None },
+                    );
+
+                    if http.is_none() && ws.is_none() && ipc.is_none() {
+                        info!("hl-node compliant multiplexed: no RPC methods captured, skipping server restart");
+                        return Ok(());
+                    }
+
+                    ctx.node().task_executor.clone().spawn_critical(
+                        "hl-rpc-server-restart",
+                        Box::pin(server_restart::restart_servers(
+                            handles.rpc,
+                            ctx.config().rpc.clone(),
+                            http,
+                            ws,
+                            ipc,
+                            hl_node_compliant_default,
+                        )),
+                    );
 
                     Ok(())
                 })
