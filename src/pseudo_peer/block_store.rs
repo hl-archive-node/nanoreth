@@ -53,7 +53,12 @@ impl BlockStore {
         if !gap_blocks.is_empty() {
             let mut nums: Vec<_> = gap_blocks.keys().copied().collect();
             nums.sort();
-            info!("Loaded {} hardcoded gap block(s): {:?}", gap_blocks.len(), nums);
+            info!(
+                "Loaded {} hardcoded gap block(s): {}..={}",
+                gap_blocks.len(),
+                nums.first().unwrap(),
+                nums.last().unwrap(),
+            );
         }
         Self {
             blocks: RwLock::new(LruMap::new(BLOCK_CACHE_LIMIT)),
