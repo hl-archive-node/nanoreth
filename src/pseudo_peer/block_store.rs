@@ -1,4 +1,4 @@
-use super::{sources::BlockSourceBoxed, utils::LruBiMap};
+use super::{patch::testnet_gap_blocks, sources::BlockSourceBoxed, utils::LruBiMap};
 use crate::node::types::BlockAndReceipts;
 use alloy_primitives::B256;
 use futures::future::BoxFuture;
@@ -9,6 +9,7 @@ use std::{
     sync::Arc,
     time::Duration,
 };
+use tracing::info;
 
 /// Function that resolves a block hash to its number via the node's database.
 /// Returns `None` if the hash is not yet in the database (e.g. headers not synced yet).
@@ -32,6 +33,8 @@ pub struct BlockStore {
     db_block_number: Option<DbBlockNumberFn>,
     /// Underlying fetch source (S3, RPC, etc.)
     source: BlockSourceBoxed,
+    /// Hardcoded testnet gap blocks missing from upstream sources
+    gap_blocks: HashMap<u64, BlockAndReceipts>,
 }
 
 impl std::fmt::Debug for BlockStore {
@@ -41,12 +44,23 @@ impl std::fmt::Debug for BlockStore {
 }
 
 impl BlockStore {
-    pub fn new(source: BlockSourceBoxed, db_block_number: Option<DbBlockNumberFn>) -> Self {
+    pub fn new(
+        source: BlockSourceBoxed,
+        db_block_number: Option<DbBlockNumberFn>,
+        chain_id: u64,
+    ) -> Self {
+        let gap_blocks = testnet_gap_blocks(chain_id);
+        if !gap_blocks.is_empty() {
+            let mut nums: Vec<_> = gap_blocks.keys().copied().collect();
+            nums.sort();
+            info!("Loaded {} hardcoded gap block(s): {:?}", gap_blocks.len(), nums);
+        }
         Self {
             blocks: RwLock::new(LruMap::new(BLOCK_CACHE_LIMIT)),
             hash_index: RwLock::new(LruBiMap::new(HASH_INDEX_LIMIT)),
             db_block_number,
             source,
+            gap_blocks,
         }
     }
 
@@ -70,6 +84,12 @@ impl BlockStore {
         if let Some(block) = self.blocks.write().get(&n) {
             return Ok(block.clone());
         }
+        if let Some(block) = self.gap_blocks.get(&n) {
+            let block = block.clone();
+            self.blocks.write().insert(n, block.clone());
+            self.index_block(&block);
+            return Ok(block);
+        }
         let block = self.source.collect_block(n).await?;
         self.blocks.write().insert(n, block.clone());
         self.index_block(&block);
@@ -87,6 +107,9 @@ impl BlockStore {
             let mut c = self.blocks.write();
             for &h in &heights {
                 if let Some(block) = c.get(&h) {
+                    cached.insert(h, block.clone());
+                } else if let Some(block) = self.gap_blocks.get(&h) {
+                    c.insert(h, block.clone());
                     cached.insert(h, block.clone());
                 } else {
                     uncached_heights.push(h);

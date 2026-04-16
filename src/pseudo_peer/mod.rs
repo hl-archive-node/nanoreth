@@ -7,6 +7,7 @@ pub mod block_store;
 pub mod cli;
 pub mod config;
 pub mod network;
+mod patch;
 pub mod service;
 pub mod sources;
 pub mod utils;
