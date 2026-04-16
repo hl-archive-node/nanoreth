@@ -113,10 +113,11 @@ impl BlockSourceConfig {
         next_block_number: u64,
         db_block_number: Option<DbBlockNumberFn>,
     ) -> Arc<BlockStore> {
+        let chain_id = chain_spec.inner.chain().id();
         let block_source = self.create_block_source(chain_spec).await;
         let block_source =
             self.create_block_source_from_node(next_block_number, block_source).await;
-        Arc::new(BlockStore::new(block_source, db_block_number))
+        Arc::new(BlockStore::new(block_source, db_block_number, chain_id))
     }
 }
 
