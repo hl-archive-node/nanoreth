@@ -4,6 +4,7 @@
 use std::net::SocketAddr;
 
 use reth_rpc_builder::RpcServerHandle;
+use reth_rpc_eth_types::EthSubscriptionIdProvider;
 
 use super::layer::HlComplianceLayer;
 
@@ -70,7 +71,9 @@ pub async fn restart_servers(
     let ipc_handle = if let (Some(path), Some(methods)) = (ipc_endpoint, ipc_methods) {
         let mut module = jsonrpsee::RpcModule::new(());
         module.merge(methods).expect("no conflicts");
-        let ipc_server = reth_ipc::server::Builder::default().build(path.clone());
+        let ipc_server = reth_ipc::server::Builder::default()
+            .set_id_provider(EthSubscriptionIdProvider::default())
+            .build(path.clone());
         let handle = ipc_server.start(module).await.expect("failed to restart IPC server");
         tracing::info!(target: "reth::cli", %path, "IPC server restarted");
         Some(handle)
@@ -117,11 +120,14 @@ async fn start_http_server(
                 }),
         );
 
-        builder = match http_only {
-            Some(true) => builder.set_config(ServerConfig::builder().http_only().build()),
-            Some(false) => builder.set_config(ServerConfig::builder().ws_only().build()),
-            None => builder,
+        let mut config =
+            ServerConfig::builder().set_id_provider(EthSubscriptionIdProvider::default());
+        config = match http_only {
+            Some(true) => config.http_only(),
+            Some(false) => config.ws_only(),
+            None => config,
         };
+        builder = builder.set_config(config.build());
 
         match builder.build(addr).await {
             Ok(server) => return server.start(module),
