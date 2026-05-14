@@ -3,10 +3,12 @@ use crate::{
     chainspec::HlChainSpec,
     node::{evm::apply_precompiles, types::HlExtras},
 };
+use alloy_consensus::{BlockHeader, transaction::TxHashRef};
 use alloy_eips::BlockId;
-use alloy_evm::Evm;
+use alloy_evm::{Evm, EvmFactory};
 use alloy_network::Ethereum;
 use alloy_primitives::U256;
+use alloy_rpc_types_eth::TransactionInfo;
 use reth::{
     api::{FullNodeTypes, HeaderTy, NodeTypes, PrimitivesTy},
     builder::{
@@ -25,21 +27,28 @@ use reth::{
         pool::{BlockingTaskGuard, BlockingTaskPool},
     },
 };
-use reth_evm::{ConfigureEvm, Database, EvmEnvFor, HaltReasonFor, InspectorFor, TxEnvFor};
+use reth_evm::{
+    ConfigureEvm, Database, EvmEnvFor, EvmFor, HaltReasonFor, InspectorFor, TxEnvFor,
+    tracing::{TracingCtx, TxTracer},
+};
 use reth_primitives::NodePrimitives;
+use reth_primitives_traits::{BlockBody, Recovered, RecoveredBlock};
 use reth_provider::{
     BlockReaderIdExt, ChainSpecProvider, ProviderError, ProviderHeader, ProviderTx,
 };
+use reth_revm::{database::StateProviderDatabase, db::CacheDB};
 use reth_rpc::RpcTypes;
 use reth_rpc_eth_api::{
     EthApiTypes, FromEvmError, RpcConvert, RpcConverter, RpcNodeCore, RpcNodeCoreExt,
     SignableTxRequest,
     helpers::{
-        AddDevSigners, EthApiSpec, EthFees, EthState, LoadFee, LoadPendingBlock, LoadState,
-        SpawnBlocking, Trace, pending_block::BuildPendingEnv, spec::SignersForApi,
+        AddDevSigners, EthApiSpec, EthFees, EthState, LoadBlock, LoadFee, LoadPendingBlock,
+        LoadState, SpawnBlocking, Trace, pending_block::BuildPendingEnv, spec::SignersForApi,
     },
 };
-use revm::context::result::ResultAndState;
+use reth_rpc_eth_types::cache::db::{StateCacheDbRefMutWrapper, StateProviderTraitObjWrapper};
+use reth_storage_api::ProviderBlock;
+use revm::{DatabaseCommit, context::result::ResultAndState};
 use std::{fmt, marker::PhantomData, sync::Arc};
 
 mod block;
@@ -246,6 +255,106 @@ where
         let mut evm = self.evm_config().evm_with_env_and_inspector(db, evm_env, inspector);
         apply_precompiles(&mut evm, &hl_extras);
         evm.transact(tx_env).map_err(Self::Error::from_evm_err)
+    }
+
+    fn apply_pre_execution_changes<DB: Send + Database + DatabaseCommit>(
+        &self,
+        _block: &reth_primitives_traits::RecoveredBlock<
+            reth_storage_api::ProviderBlock<Self::Provider>,
+        >,
+        _db: &mut DB,
+        _evm_env: &EvmEnvFor<Self::Evm>,
+    ) -> Result<(), Self::Error> {
+        // HL dynamic precompiles are EVM-local, so they must be installed on the actual
+        // execution EVM rather than through this DB/env-only hook.
+        Ok(())
+    }
+
+    async fn trace_block_until_with_inspector<Setup, Insp, F, R>(
+        &self,
+        block_id: BlockId,
+        block: Option<Arc<RecoveredBlock<ProviderBlock<Self::Provider>>>>,
+        highest_index: Option<u64>,
+        mut inspector_setup: Setup,
+        f: F,
+    ) -> Result<Option<Vec<R>>, Self::Error>
+    where
+        Self: LoadBlock,
+        F: Fn(
+                TransactionInfo,
+                TracingCtx<
+                    '_,
+                    Recovered<&ProviderTx<Self::Provider>>,
+                    EvmFor<Self::Evm, StateCacheDbRefMutWrapper<'_, '_>, Insp>,
+                >,
+            ) -> Result<R, Self::Error>
+            + Send
+            + 'static,
+        Setup: FnMut() -> Insp + Send + 'static,
+        Insp: Clone + for<'a, 'b> InspectorFor<Self::Evm, StateCacheDbRefMutWrapper<'a, 'b>>,
+        R: Send + 'static,
+    {
+        let block = async {
+            if block.is_some() {
+                return Ok(block);
+            }
+            self.recovered_block(block_id).await
+        };
+
+        let ((evm_env, _), block) = futures::try_join!(self.evm_env_at(block_id), block)?;
+
+        let Some(block) = block else { return Ok(None) };
+
+        if block.body().transactions().is_empty() {
+            return Ok(Some(Vec::new()));
+        }
+
+        self.spawn_blocking_io_fut(move |this| async move {
+            let state_at = block.parent_hash();
+            let block_hash = block.hash();
+            let block_number = evm_env.block_env.number.saturating_to();
+            let base_fee = evm_env.block_env.basefee;
+            let hl_extras =
+                this.get_hl_extras(evm_env.block_env.number.to::<u64>().into()).map_err(
+                    |err: ProviderError| <EthApiError as From<ProviderError>>::from(err),
+                )?;
+
+            let state = this.state_at_block_id(state_at.into()).await?;
+            let mut db =
+                CacheDB::new(StateProviderDatabase::new(StateProviderTraitObjWrapper(&state)));
+
+            let max_transactions = highest_index.map_or_else(
+                || block.body().transaction_count(),
+                |highest| highest as usize + 1,
+            );
+
+            let mut idx = 0;
+            let mut evm = this.evm_config().evm_factory().create_evm_with_inspector(
+                StateCacheDbRefMutWrapper(&mut db),
+                evm_env,
+                inspector_setup(),
+            );
+            apply_precompiles(&mut evm, &hl_extras);
+            let mut tracer = TxTracer::new(evm);
+
+            let results = tracer
+                .try_trace_many(block.transactions_recovered().take(max_transactions), |ctx| {
+                    let tx_info = TransactionInfo {
+                        hash: Some(*ctx.tx.tx_hash()),
+                        index: Some(idx),
+                        block_hash: Some(block_hash),
+                        block_number: Some(block_number),
+                        base_fee: Some(base_fee),
+                    };
+                    idx += 1;
+
+                    f(tx_info, ctx)
+                })
+                .collect::<Result<_, _>>()?;
+
+            Ok(Some(results))
+        })
+        .await
     }
 }
 
