@@ -39,28 +39,30 @@ impl S3BlockSource {
         bucket: &str,
         dir: &str,
         is_dir: bool,
-    ) -> Option<(u64, String)> {
+    ) -> eyre::Result<Option<(u64, String)>> {
         let request = client
             .list_objects()
             .bucket(bucket)
             .prefix(dir)
             .delimiter("/")
             .request_payer(RequestPayer::Requester);
-        let response = request.send().await.ok()?;
+        let response = request.send().await?;
         let files: Vec<String> = if is_dir {
             response
-                .common_prefixes?
+                .common_prefixes
+                .unwrap_or_default()
                 .iter()
-                .map(|object| object.prefix.as_ref().unwrap().to_string())
+                .filter_map(|object| object.prefix.as_ref().map(ToString::to_string))
                 .collect()
         } else {
             response
-                .contents?
+                .contents
+                .unwrap_or_default()
                 .iter()
-                .map(|object| object.key.as_ref().unwrap().to_string())
+                .filter_map(|object| object.key.as_ref().map(ToString::to_string))
                 .collect()
         };
-        utils::name_with_largest_number(&files, is_dir)
+        Ok(utils::name_with_largest_number(&files, is_dir))
     }
 }
 
@@ -88,19 +90,28 @@ impl BlockSource for S3BlockSource {
         .boxed()
     }
 
-    fn find_latest_block_number(&self) -> BoxFuture<'static, Option<u64>> {
+    fn find_latest_block_number(&self) -> BoxFuture<'static, eyre::Result<Option<u64>>> {
         let client = self.client.clone();
         let bucket = self.bucket.clone();
         async move {
-            let (_, first_level) =
-                Self::pick_path_with_highest_number(&client, &bucket, "", true).await?;
-            let (_, second_level) =
-                Self::pick_path_with_highest_number(&client, &bucket, &first_level, true).await?;
-            let (block_number, third_level) =
-                Self::pick_path_with_highest_number(&client, &bucket, &second_level, false).await?;
+            let Some((_, first_level)) =
+                Self::pick_path_with_highest_number(&client, &bucket, "", true).await?
+            else {
+                return Ok(None);
+            };
+            let Some((_, second_level)) =
+                Self::pick_path_with_highest_number(&client, &bucket, &first_level, true).await?
+            else {
+                return Ok(None);
+            };
+            let Some((block_number, third_level)) =
+                Self::pick_path_with_highest_number(&client, &bucket, &second_level, false).await?
+            else {
+                return Ok(None);
+            };
 
             info!("Latest block number: {} with path {}", block_number, third_level);
-            Some(block_number)
+            Ok(Some(block_number))
         }
         .boxed()
     }
