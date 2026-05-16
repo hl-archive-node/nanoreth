@@ -32,9 +32,10 @@ use reth_storage_api::BlockNumReader;
 use std::{
     net::{Ipv4Addr, SocketAddr},
     sync::Arc,
+    time::{Duration, Instant},
 };
 use tokio::sync::{Mutex, mpsc, oneshot};
-use tracing::info;
+use tracing::{info, warn};
 
 pub mod block_import;
 
@@ -288,7 +289,11 @@ where
                 // via a direct forkchoice update. This must happen before
                 // start_pseudo_peer (which never returns).
                 // get_by_number auto-indexes the block's hash AND parent hash.
-                if let Some(latest) = block_store.find_latest_block_number().await {
+                let polling_interval = block_store.polling_interval();
+                let mut retry_interval = polling_interval;
+                let retry_started_at = Instant::now();
+                loop {
+                    let latest = block_store.wait_for_latest_block_number().await;
                     match block_store.get_by_number(latest).await {
                         Ok(block) => {
                             let hash = block.hash();
@@ -299,13 +304,22 @@ where
                                 "Sending forkchoice trigger from block source"
                             );
                             let _ = fcu_trigger_tx.send(hash);
+                            break;
                         }
                         Err(e) => {
-                            info!(
+                            warn!(
                                 target: "reth::cli",
                                 %e,
-                                "Failed to read latest block for forkchoice trigger"
+                                ?retry_interval,
+                                "Failed to read latest block for forkchoice trigger; retrying"
                             );
+                            tokio::time::sleep(retry_interval).await;
+                            if retry_started_at.elapsed() >= Duration::from_secs(2) {
+                                retry_interval =
+                                    retry_interval.saturating_mul(2).min(Duration::from_secs(30));
+                            } else {
+                                retry_interval = polling_interval;
+                            }
                         }
                     }
                 }
