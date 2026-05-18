@@ -58,13 +58,13 @@ impl BlockSource for RpcBlockSource {
         .boxed()
     }
 
-    fn find_latest_block_number(&self) -> BoxFuture<'static, eyre::Result<Option<u64>>> {
+    fn find_latest_block_number(&self) -> BoxFuture<'static, Option<u64>> {
         let client = self.client.clone();
         async move {
             let result: Option<u64> =
-                client.request("hl_syncLatestBlockNumber", Vec::<u64>::new()).await?;
+                client.request("hl_syncLatestBlockNumber", Vec::<u64>::new()).await.ok()?;
             info!("Latest block number from remote: {:?}", result);
-            Ok(result)
+            result
         }
         .boxed()
     }

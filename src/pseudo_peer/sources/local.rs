@@ -27,19 +27,15 @@ impl LocalBlockSource {
         Self { dir: dir.into(), metrics: LocalBlockSourceMetrics::default() }
     }
 
-    async fn pick_path_with_highest_number(
-        dir: PathBuf,
-        is_dir: bool,
-    ) -> eyre::Result<Option<(u64, String)>> {
-        let files = std::fs::read_dir(&dir)?.collect::<Vec<_>>();
+    async fn pick_path_with_highest_number(dir: PathBuf, is_dir: bool) -> Option<(u64, String)> {
+        let files = std::fs::read_dir(&dir).unwrap().collect::<Vec<_>>();
         let files = files
             .into_iter()
-            .filter_map(Result::ok)
-            .filter(|path| path.path().is_dir() == is_dir)
-            .map(|entry| entry.path().to_string_lossy().to_string())
+            .filter(|path| path.as_ref().unwrap().path().is_dir() == is_dir)
+            .map(|entry| entry.unwrap().path().to_string_lossy().to_string())
             .collect::<Vec<_>>();
 
-        Ok(utils::name_with_largest_number(&files, is_dir))
+        utils::name_with_largest_number(&files, is_dir)
     }
 }
 
@@ -62,27 +58,17 @@ impl BlockSource for LocalBlockSource {
         .boxed()
     }
 
-    fn find_latest_block_number(&self) -> BoxFuture<'static, eyre::Result<Option<u64>>> {
+    fn find_latest_block_number(&self) -> BoxFuture<'static, Option<u64>> {
         let dir = self.dir.clone();
         async move {
-            let Some((_, first_level)) =
-                Self::pick_path_with_highest_number(dir.clone(), true).await?
-            else {
-                return Ok(None);
-            };
-            let Some((_, second_level)) =
-                Self::pick_path_with_highest_number(dir.join(first_level), true).await?
-            else {
-                return Ok(None);
-            };
-            let Some((block_number, third_level)) =
-                Self::pick_path_with_highest_number(dir.join(second_level), false).await?
-            else {
-                return Ok(None);
-            };
+            let (_, first_level) = Self::pick_path_with_highest_number(dir.clone(), true).await?;
+            let (_, second_level) =
+                Self::pick_path_with_highest_number(dir.join(first_level), true).await?;
+            let (block_number, third_level) =
+                Self::pick_path_with_highest_number(dir.join(second_level), false).await?;
 
             info!("Latest block number: {} with path {}", block_number, third_level);
-            Ok(Some(block_number))
+            Some(block_number)
         }
         .boxed()
     }

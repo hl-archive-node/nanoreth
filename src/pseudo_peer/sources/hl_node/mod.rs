@@ -91,7 +91,7 @@ impl BlockSource for HlNodeBlockSource {
         })
     }
 
-    fn find_latest_block_number(&self) -> BoxFuture<'static, eyre::Result<Option<u64>>> {
+    fn find_latest_block_number(&self) -> BoxFuture<'static, Option<u64>> {
         let fallback = self.fallback.clone();
         let args = self.args.clone();
         Box::pin(async move {
@@ -106,7 +106,7 @@ impl BlockSource for HlNodeBlockSource {
             match FileOperations::read_last_block_from_file(&dir) {
                 Some((_, height)) => {
                     info!("Latest block number: {} with path {}", height, dir.display());
-                    Ok(Some(height))
+                    Some(height)
                 }
                 None => {
                     warn!(
