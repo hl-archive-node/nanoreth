@@ -63,14 +63,16 @@ impl BlockPoller {
         info!("Starting block poller");
 
         let polling_interval = block_store.polling_interval();
-        let mut next_block_number = block_store.wait_for_latest_block_number().await;
+        let mut next_block_number = block_store
+            .find_latest_block_number()
+            .await
+            .ok_or(eyre::eyre!("Failed to find latest block number"))?;
 
         loop {
-            if let Some(debug_cutoff_height) = debug_cutoff_height
-                && next_block_number > debug_cutoff_height
+            if let Some(debug_cutoff_height) = debug_cutoff_height &&
+                next_block_number > debug_cutoff_height
             {
-                tokio::time::sleep(polling_interval).await;
-                continue;
+                next_block_number = debug_cutoff_height;
             }
 
             match block_store.get_by_number(next_block_number).await {
@@ -78,14 +80,7 @@ impl BlockPoller {
                     block_tx.send((next_block_number, block)).await?;
                     next_block_number += 1;
                 }
-                Err(err) => {
-                    warn!(
-                        block_number = next_block_number,
-                        ?err,
-                        "Failed to fetch block from block source; retrying"
-                    );
-                    tokio::time::sleep(polling_interval).await;
-                }
+                Err(_) => tokio::time::sleep(polling_interval).await,
             }
         }
     }

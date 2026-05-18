@@ -7,9 +7,9 @@ use reth_network::cache::LruMap;
 use std::{
     collections::HashMap,
     sync::Arc,
-    time::{Duration, Instant},
+    time::Duration,
 };
-use tracing::{info, warn};
+use tracing::info;
 
 /// Function that resolves a block hash to its number via the node's database.
 /// Returns `None` if the hash is not yet in the database (e.g. headers not synced yet).
@@ -18,8 +18,6 @@ pub type DbBlockNumberFn = Arc<dyn Fn(B256) -> Option<u64> + Send + Sync>;
 
 const BLOCK_CACHE_LIMIT: u32 = 100_000;
 const HASH_INDEX_LIMIT: u32 = 1_000_000;
-const LATEST_BLOCK_RETRY_BACKOFF_AFTER: Duration = Duration::from_secs(2);
-const LATEST_BLOCK_RETRY_MAX_INTERVAL: Duration = Duration::from_secs(30);
 
 /// Unified block store that combines block content caching, hash↔number indexing,
 /// and database fallback into a single abstraction.
@@ -167,101 +165,11 @@ impl BlockStore {
 
     // --- Delegated block source methods ---
 
-    pub fn find_latest_block_number(&self) -> BoxFuture<'static, eyre::Result<Option<u64>>> {
+    pub fn find_latest_block_number(&self) -> BoxFuture<'static, Option<u64>> {
         self.source.find_latest_block_number()
-    }
-
-    pub async fn wait_for_latest_block_number(&self) -> u64 {
-        let polling_interval = self.polling_interval();
-        let mut retry_interval = self.polling_interval();
-        let retry_started_at = Instant::now();
-        loop {
-            match self.find_latest_block_number().await {
-                Ok(Some(block_number)) => return block_number,
-                Ok(None) => {
-                    warn!(
-                        ?retry_interval,
-                        "No latest block available from block source; retrying"
-                    );
-                }
-                Err(err) => {
-                    warn!(
-                        ?retry_interval,
-                        ?err,
-                        "Failed to find latest block number from block source; retrying"
-                    );
-                }
-            }
-
-            tokio::time::sleep(retry_interval).await;
-            if retry_started_at.elapsed() >= LATEST_BLOCK_RETRY_BACKOFF_AFTER {
-                retry_interval = retry_interval
-                    .saturating_mul(2)
-                    .min(LATEST_BLOCK_RETRY_MAX_INTERVAL);
-            } else {
-                retry_interval = polling_interval;
-            }
-        }
     }
 
     pub fn polling_interval(&self) -> Duration {
         self.source.polling_interval()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{
-        node::types::BlockAndReceipts,
-        pseudo_peer::sources::{BlockSource, BlockSourceBoxed},
-    };
-    use futures::{FutureExt, future::BoxFuture};
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    #[derive(Debug)]
-    struct EventuallyLatestBlockSource {
-        attempts: Arc<AtomicUsize>,
-    }
-
-    impl BlockSource for EventuallyLatestBlockSource {
-        fn collect_block(&self, _height: u64) -> BoxFuture<'static, eyre::Result<BlockAndReceipts>> {
-            async { Err(eyre::eyre!("unused in this test")) }.boxed()
-        }
-
-        fn find_latest_block_number(&self) -> BoxFuture<'static, eyre::Result<Option<u64>>> {
-            let attempts = self.attempts.clone();
-            async move {
-                let attempt = attempts.fetch_add(1, Ordering::SeqCst);
-                match attempt {
-                    0 => Err(eyre::eyre!("temporary source error")),
-                    1 => Ok(None),
-                    _ => Ok(Some(42)),
-                }
-            }
-            .boxed()
-        }
-
-        fn recommended_chunk_size(&self) -> u64 {
-            1
-        }
-
-        fn polling_interval(&self) -> Duration {
-            Duration::from_millis(1)
-        }
-    }
-
-    #[tokio::test]
-    async fn wait_for_latest_block_number_retries_until_available() {
-        let attempts = Arc::new(AtomicUsize::new(0));
-        let source: BlockSourceBoxed = Arc::new(Box::new(EventuallyLatestBlockSource {
-            attempts: attempts.clone(),
-        }));
-        let store = BlockStore::new(source, None, 999);
-
-        let latest = store.wait_for_latest_block_number().await;
-
-        assert_eq!(latest, 42);
-        assert_eq!(attempts.load(Ordering::SeqCst), 3);
     }
 }

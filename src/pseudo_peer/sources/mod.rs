@@ -25,7 +25,7 @@ pub trait BlockSource: Send + Sync + std::fmt::Debug + Unpin + 'static {
     fn collect_block(&self, height: u64) -> BoxFuture<'static, eyre::Result<BlockAndReceipts>>;
 
     /// Finds the latest block number available from this source
-    fn find_latest_block_number(&self) -> BoxFuture<'static, eyre::Result<Option<u64>>>;
+    fn find_latest_block_number(&self) -> BoxFuture<'static, Option<u64>>;
 
     /// Returns the recommended chunk size for batch operations
     fn recommended_chunk_size(&self) -> u64;
