@@ -12,6 +12,7 @@ use std::{
 };
 use tracing::info;
 
+use super::patch::recover_testnet_system_tx_sender;
 use crate::{
     HlBlock, HlBlockBody, HlHeader,
     node::{
@@ -179,14 +180,29 @@ fn persist_spot_metadata_to_db(metadata: &BTreeMap<Address, SpotId>) {
     }
 }
 
-fn system_tx_to_reth_transaction(transaction: &SystemTx, chain_id: u64) -> TxSigned {
+fn system_tx_to_reth_transaction(
+    transaction: &SystemTx,
+    chain_id: u64,
+    block_number: u64,
+) -> TxSigned {
     let Transaction::Legacy(tx) = &transaction.tx else {
         panic!("Unexpected transaction type");
     };
     let TxKind::Call(to) = tx.to else {
         panic!("Unexpected contract creation");
     };
-    let s = if tx.input.is_empty() {
+    let s = if let Some(sender) = recover_testnet_system_tx_sender(
+        chain_id,
+        block_number,
+        to,
+        transaction.receipt.as_ref(),
+    ) {
+        // Encode the real `msg.sender` (recovered from the ERC-20 `Transfer` log) into
+        // `s`, so that `s_to_address(s)` recovers the actual holder. This lets each
+        // sender's nonces validate normally, removing the need to disable nonce checks
+        // for these system transactions.
+        U256::from_be_slice(sender.as_slice())
+    } else if tx.input.is_empty() {
         U256::from(0x1)
     } else {
         loop {
@@ -228,7 +244,10 @@ impl SealedBlock {
         system_txs.retain(|tx| tx.receipt.is_some());
 
         let mut merged_txs = vec![];
-        merged_txs.extend(system_txs.iter().map(|tx| system_tx_to_reth_transaction(tx, chain_id)));
+        let block_number = self.header.header.number;
+        merged_txs.extend(
+            system_txs.iter().map(|tx| system_tx_to_reth_transaction(tx, chain_id, block_number)),
+        );
         merged_txs.extend(self.body.transactions.iter().map(|tx| tx.to_reth_transaction()));
 
         let mut merged_receipts = vec![];
@@ -255,5 +274,72 @@ impl SealedBlock {
             ),
             body: block_body,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::chainspec::TESTNET_CHAIN_ID;
+    use alloy_consensus::{Transaction as _, TxType};
+    use alloy_primitives::{Log, LogData, address, b256};
+    use reth_ethereum_primitives::EthereumReceipt;
+    use reth_primitives_traits::SignerRecoverable;
+
+    // The single token targeted by the testnet sender-recovery patch.
+    const TOKEN: Address = address!("2b3370ee501b4a559b57d449569354196457d8ab");
+    const FROM_BLOCK: u64 = 55231857;
+    const HOLDER_A: Address = address!("f9b10ef826e9aa275f1813034e3bd9b80224e535");
+    const HOLDER_B: Address = address!("0b80659a4076e9e93c7dbe0f10675a16a3e5c206");
+
+    fn transfer_log(from: Address, to: Address) -> Log {
+        Log {
+            address: TOKEN,
+            data: LogData::new_unchecked(
+                vec![
+                    b256!("ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"),
+                    from.into_word(),
+                    to.into_word(),
+                ],
+                U256::from(1_000u64).to_be_bytes::<32>().to_vec().into(),
+            ),
+        }
+    }
+
+    fn system_tx(from: Address, to: Address, nonce: u64) -> SystemTx {
+        let receipt: LegacyReceipt = EthereumReceipt {
+            tx_type: TxType::Legacy,
+            success: true,
+            cumulative_gas_used: 0,
+            logs: vec![transfer_log(from, to)],
+        }
+        .into();
+        SystemTx {
+            tx: Transaction::Legacy(TxLegacy {
+                chain_id: Some(TESTNET_CHAIN_ID),
+                nonce,
+                gas_price: 0,
+                gas_limit: 200_000,
+                to: TxKind::Call(to),
+                value: U256::ZERO,
+                // transfer(address,uint256) selector; input non-empty
+                input: Bytes::from_static(&[0xa9, 0x05, 0x9c, 0xbb]),
+            }),
+            receipt: Some(receipt),
+        }
+    }
+
+    #[test]
+    fn testnet_conversion_recovers_real_holder() {
+        // Full path: testnet system_tx -> synthetic signature -> recover_signer == real sender.
+        // Both interleaved holders recover independently (the synthetic collision is gone).
+        let tx = system_tx(HOLDER_B, TOKEN, 1);
+        let signed = system_tx_to_reth_transaction(&tx, TESTNET_CHAIN_ID, FROM_BLOCK);
+        assert_eq!(signed.gas_price(), Some(0)); // recognised as a system tx
+        assert_eq!(signed.recover_signer().unwrap(), HOLDER_B);
+
+        let tx2 = system_tx(HOLDER_A, TOKEN, 0);
+        let signed2 = system_tx_to_reth_transaction(&tx2, TESTNET_CHAIN_ID, FROM_BLOCK);
+        assert_eq!(signed2.recover_signer().unwrap(), HOLDER_A);
     }
 }
