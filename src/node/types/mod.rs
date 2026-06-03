@@ -17,6 +17,7 @@ pub type ReadPrecompileCall = (Address, Vec<(ReadPrecompileInput, ReadPrecompile
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Default, Hash)]
 pub struct ReadPrecompileCalls(pub Vec<ReadPrecompileCall>);
 
+mod patch;
 pub(crate) mod reth_compat;
 
 // Re-export spot metadata functions
