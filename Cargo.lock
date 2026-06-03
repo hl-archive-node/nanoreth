@@ -9354,6 +9354,7 @@ dependencies = [
  "auto_impl",
  "aws-config",
  "aws-sdk-s3",
+ "backon",
  "bytes",
  "cfg-if",
  "clap",
