@@ -6,7 +6,7 @@ use crate::{
     },
     pseudo_peer::BlockSourceArgs,
 };
-use clap::{Args, Parser};
+use clap::{Args, Parser, Subcommand};
 use reth::{
     CliRunner,
     args::{DatabaseArgs, DatadirArgs, LogArgs},
@@ -121,6 +121,49 @@ pub struct HlNodeArgs {
     pub spot_meta_overrides: Vec<String>,
 }
 
+/// reth_hl cli commands: the built-in reth subcommands plus reth_hl-specific extras.
+#[derive(Debug, Subcommand)]
+pub enum HlCommands<
+    Spec: ChainSpecParser = HlChainSpecParser,
+    Ext: clap::Args + fmt::Debug = HlNodeArgs,
+> {
+    /// Built-in reth subcommands (node, init, init-state, db, ...).
+    #[command(flatten)]
+    Reth(Commands<Spec, Ext>),
+
+    /// Clear the spot metadata table from the database (debug utility).
+    ///
+    /// Removes all stored spot metadata so it will be re-fetched from the API on
+    /// the next run. Useful after a bad fetch or to re-apply `--spot-meta.*` overrides.
+    #[command(name = "clear-spot-meta")]
+    ClearSpotMeta(ClearSpotMetaCommand<Spec>),
+}
+
+impl<C: ChainSpecParser, Ext: clap::Args + fmt::Debug> HlCommands<C, Ext> {
+    /// Returns the underlying chain being used for commands, if any.
+    pub fn chain_spec(&self) -> Option<&Arc<C::ChainSpec>> {
+        match self {
+            Self::Reth(command) => command.chain_spec(),
+            Self::ClearSpotMeta(command) => Some(&command.env.chain),
+        }
+    }
+}
+
+/// Clear the spot metadata table from the database.
+#[derive(Debug, Parser)]
+pub struct ClearSpotMetaCommand<C: ChainSpecParser> {
+    #[command(flatten)]
+    env: EnvironmentArgs<C>,
+}
+
+impl<C: ChainSpecParser<ChainSpec = HlChainSpec>> ClearSpotMetaCommand<C> {
+    fn execute(self) -> eyre::Result<()> {
+        let data_dir = self.env.datadir.clone().resolve_datadir(self.env.chain.chain());
+        let db_path = data_dir.db();
+        spot_meta_init::clear_spot_metadata(db_path, self.env.db.database_args())
+    }
+}
+
 /// The main reth_hl cli interface.
 ///
 /// This is the entrypoint to the executable.
@@ -130,7 +173,7 @@ pub struct Cli<Spec: ChainSpecParser = HlChainSpecParser, Ext: clap::Args + fmt:
 {
     /// The command to run
     #[command(subcommand)]
-    pub command: Commands<Spec, Ext>,
+    pub command: HlCommands<Spec, Ext>,
 
     #[command(flatten)]
     logs: LogArgs,
@@ -180,7 +223,14 @@ where
             (HlEvmConfig::new(spec.clone()), Arc::new(HlConsensus::new(spec)))
         };
 
-        match self.command {
+        // Handle reth_hl-specific commands; otherwise fall through to the built-in
+        // reth subcommands below.
+        let command = match self.command {
+            HlCommands::Reth(command) => command,
+            HlCommands::ClearSpotMeta(command) => return command.execute(),
+        };
+
+        match command {
             Commands::Node(command) => runner.run_command_until_exit(|ctx| {
                 // NOTE: This is for one time migration around Oct 10 upgrade:
                 // It's not necessary anymore, an environment variable gate is added here.

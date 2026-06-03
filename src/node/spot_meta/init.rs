@@ -5,7 +5,10 @@ use crate::node::{
 };
 use alloy_primitives::Address;
 use reth_db::{DatabaseEnv, cursor::DbCursorRO};
-use reth_db_api::{Database, transaction::DbTx};
+use reth_db_api::{
+    Database,
+    transaction::{DbTx, DbTxMut},
+};
 use std::{collections::BTreeMap, sync::Arc};
 use tracing::info;
 
@@ -93,5 +96,24 @@ pub fn init_spot_metadata(
     reth_compat::store_spot_metadata(&db, &metadata)?;
 
     info!("Successfully fetched and stored spot metadata for chain {}", chain_id);
+    Ok(())
+}
+
+/// Clear the spot metadata table from the database.
+///
+/// Debug utility: removes all stored spot metadata so it will be re-fetched from
+/// the API on the next run (e.g. after a bad fetch or to pick up overrides).
+pub fn clear_spot_metadata(
+    db_path: impl AsRef<std::path::Path>,
+    db_args: reth_db::mdbx::DatabaseArguments,
+) -> eyre::Result<()> {
+    let db = Arc::new(reth_db::open_db(db_path.as_ref(), db_args)?);
+
+    db.update(|tx| -> Result<(), reth_db::DatabaseError> {
+        tx.clear::<tables::SpotMetadata>()?;
+        Ok(())
+    })??;
+
+    info!("Cleared spot metadata table");
     Ok(())
 }
