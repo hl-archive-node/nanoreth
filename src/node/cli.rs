@@ -104,6 +104,21 @@ pub struct HlNodeArgs {
     /// that use --block-source=rpc://... to sync from this node.
     #[arg(long, env = "ENABLE_SYNC_SERVER")]
     pub enable_sync_server: bool,
+
+    /// Custom API URL used when fetching spot metadata.
+    ///
+    /// Defaults to Hyperliquid's mainnet/testnet info endpoint based on the chain id.
+    /// Useful for pointing at a proxy or a private archive of the spot-meta response.
+    #[arg(long = "spot-meta.url", env = "SPOT_META_URL")]
+    pub spot_meta_url: Option<String>,
+
+    /// Manual spot-metadata overrides as `address:index` pairs.
+    ///
+    /// Applied on top of (and winning over) the fetched metadata and built-in patches.
+    /// May be repeated or comma-separated, e.g.
+    /// `--spot-meta.override 0xabc...:0 --spot-meta.override 0xdef...:3`.
+    #[arg(long = "spot-meta.override", env = "SPOT_META_OVERRIDES", value_delimiter = ',')]
+    pub spot_meta_overrides: Vec<String>,
 }
 
 /// The main reth_hl cli interface.

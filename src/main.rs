@@ -19,7 +19,7 @@ use reth_hl::{
         HlNode,
         cli::{Cli, HlNodeArgs},
         rpc::precompile::{HlBlockPrecompileApiServer, HlBlockPrecompileExt},
-        spot_meta::init as spot_meta_init,
+        spot_meta::{self, init as spot_meta_init},
         storage::tables::Tables,
         types::set_spot_metadata_db,
     },
@@ -48,6 +48,15 @@ fn main() -> eyre::Result<()> {
     Cli::<HlChainSpecParser, HlNodeArgs>::parse().run(
         |builder: WithLaunchContext<NodeBuilder<Arc<DatabaseEnv>, HlChainSpec>>,
          ext: HlNodeArgs| async move {
+            // Apply spot-meta CLI overrides before anything fetches metadata.
+            spot_meta::set_spot_meta_url(ext.spot_meta_url.clone());
+            let mut spot_meta_overrides = std::collections::BTreeMap::new();
+            for entry in &ext.spot_meta_overrides {
+                let (address, index) = spot_meta::parse_spot_meta_override(entry)?;
+                spot_meta_overrides.insert(address, index);
+            }
+            spot_meta::add_spot_meta_overrides(spot_meta_overrides);
+
             let default_upstream_rpc_url = builder.config().chain.official_rpc_url();
 
             let enable_sync_server = ext.enable_sync_server;

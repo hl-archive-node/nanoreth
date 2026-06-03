@@ -132,6 +132,10 @@ static SPOT_EVM_MAP: LazyLock<Arc<RwLock<BTreeMap<Address, SpotId>>>> =
 // Optional database handle for persisting on-demand fetches
 static DB_HANDLE: LazyLock<Mutex<Option<Arc<DatabaseEnv>>>> = LazyLock::new(|| Mutex::new(None));
 
+// Single-flight guard: ensures only one thread fetches spot metadata from the
+// API on a cache miss, so a thundering herd of misses produces one request.
+static SPOT_FETCH_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
 /// Set the database handle for persisting spot metadata
 pub fn set_spot_metadata_db(db: Arc<DatabaseEnv>) {
     *DB_HANDLE.lock().unwrap() = Some(db);
@@ -190,7 +194,17 @@ fn system_tx_to_reth_transaction(transaction: &SystemTx, chain_id: u64) -> TxSig
                 break spot.to_s();
             }
 
-            // Cache miss - fetch from API, update cache, and persist to database
+            // Cache miss - single-flight the API fetch so concurrent misses don't
+            // each hit the API. Only the thread holding SPOT_FETCH_LOCK fetches;
+            // the rest block here and re-check the cache once it's released.
+            let _fetch_guard = SPOT_FETCH_LOCK.lock().unwrap();
+
+            // Double-checked: another thread may have populated the cache while we
+            // waited for the fetch lock.
+            if SPOT_EVM_MAP.read().unwrap().contains_key(&to) {
+                continue;
+            }
+
             info!("Contract not found: {to:?} from spot mapping, fetching from API...");
             let metadata = erc20_contract_to_spot_token(chain_id).unwrap();
             *SPOT_EVM_MAP.write().unwrap() = metadata.clone();
