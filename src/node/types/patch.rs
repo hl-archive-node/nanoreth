@@ -2,8 +2,9 @@
 use super::LegacyReceipt;
 use crate::chainspec::TESTNET_CHAIN_ID;
 use alloy_primitives::{Address, B256, U256, address, b256};
+use std::ops::Range;
 
-/// `keccak256("Transfer(address,address,uint256)")` — the ERC-20 `Transfer` topic.
+/// `keccak256("Transfer(address,address,uint256)")` - the ERC-20 `Transfer` topic.
 const ERC20_TRANSFER_TOPIC: B256 =
     b256!("ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef");
 
@@ -14,12 +15,14 @@ const ERC20_TRANSFER_TOPIC: B256 =
 /// once the true `msg.sender` is recovered from the receipt.
 const SENDER_RECOVERY_TOKEN: Address = address!("0x2b3370ee501b4a559b57d449569354196457d8ab");
 
-/// First testnet block at which the recovery applies.
-const SENDER_RECOVERY_FROM_BLOCK: u64 = 55231857;
+/// Half-open testnet block range in which the recovery applies: from the first affected block
+/// until upstream starts emitting `from`, which supersedes this log recovery (the next system tx,
+/// at `55432087`, carries it; none occur in between).
+const SENDER_RECOVERY_BLOCKS: Range<u64> = 55231857..55432000;
 
 /// Recover the real `msg.sender` of a token system transaction from its receipt,
-/// restricted to the minimal known-affected set (testnet, one token, at or after
-/// the first affected block). Returns `None` everywhere else so the caller falls
+/// restricted to the minimal known-affected set (testnet, one token,
+/// [`SENDER_RECOVERY_BLOCKS`]). Returns `None` everywhere else so the caller falls
 /// back to the legacy synthetic-sender (`to_s`) encoding.
 ///
 /// For an ERC-20 transfer the caller is observable as the `from` topic of the
@@ -31,7 +34,7 @@ pub(super) fn recover_testnet_system_tx_sender(
     receipt: Option<&LegacyReceipt>,
 ) -> Option<Address> {
     if chain_id != TESTNET_CHAIN_ID
-        || block_number < SENDER_RECOVERY_FROM_BLOCK
+        || !SENDER_RECOVERY_BLOCKS.contains(&block_number)
         || token != SENDER_RECOVERY_TOKEN
     {
         return None;
@@ -85,7 +88,7 @@ mod tests {
     fn recovers_sender_for_targeted_token() {
         let logs = vec![transfer_log(SENDER_RECOVERY_TOKEN, HOLDER_B, HOLDER_A)];
         assert_eq!(
-            recover(TESTNET_CHAIN_ID, SENDER_RECOVERY_FROM_BLOCK, SENDER_RECOVERY_TOKEN, logs),
+            recover(TESTNET_CHAIN_ID, SENDER_RECOVERY_BLOCKS.start, SENDER_RECOVERY_TOKEN, logs),
             Some(HOLDER_B)
         );
     }
@@ -94,15 +97,24 @@ mod tests {
     fn declines_outside_the_minimal_set() {
         let log = || vec![transfer_log(SENDER_RECOVERY_TOKEN, HOLDER_B, HOLDER_A)];
         // wrong chain
-        assert_eq!(recover(999, SENDER_RECOVERY_FROM_BLOCK, SENDER_RECOVERY_TOKEN, log()), None);
+        assert_eq!(recover(999, SENDER_RECOVERY_BLOCKS.start, SENDER_RECOVERY_TOKEN, log()), None);
         // before the first affected block
         assert_eq!(
-            recover(TESTNET_CHAIN_ID, SENDER_RECOVERY_FROM_BLOCK - 1, SENDER_RECOVERY_TOKEN, log()),
+            recover(TESTNET_CHAIN_ID, SENDER_RECOVERY_BLOCKS.start - 1, SENDER_RECOVERY_TOKEN, log()),
             None
+        );
+        // at/after the upper bound, `from` supersedes log recovery
+        assert_eq!(
+            recover(TESTNET_CHAIN_ID, SENDER_RECOVERY_BLOCKS.end, SENDER_RECOVERY_TOKEN, log()),
+            None
+        );
+        assert_eq!(
+            recover(TESTNET_CHAIN_ID, SENDER_RECOVERY_BLOCKS.end - 1, SENDER_RECOVERY_TOKEN, log()),
+            Some(HOLDER_B)
         );
         // a different (non-targeted) token, even though it emits a Transfer
         let other = vec![transfer_log(OTHER_TOKEN, HOLDER_B, HOLDER_A)];
-        assert_eq!(recover(TESTNET_CHAIN_ID, SENDER_RECOVERY_FROM_BLOCK, OTHER_TOKEN, other), None);
+        assert_eq!(recover(TESTNET_CHAIN_ID, SENDER_RECOVERY_BLOCKS.start, OTHER_TOKEN, other), None);
     }
 
     #[test]
@@ -110,7 +122,7 @@ mod tests {
         // Transfer emitted by some other contract (not the token `to`).
         let foreign = vec![transfer_log(OTHER_TOKEN, HOLDER_B, HOLDER_A)];
         assert_eq!(
-            recover(TESTNET_CHAIN_ID, SENDER_RECOVERY_FROM_BLOCK, SENDER_RECOVERY_TOKEN, foreign),
+            recover(TESTNET_CHAIN_ID, SENDER_RECOVERY_BLOCKS.start, SENDER_RECOVERY_TOKEN, foreign),
             None
         );
         // Non-Transfer event (wrong topic0) from the token.
@@ -122,7 +134,7 @@ mod tests {
             ),
         };
         assert_eq!(
-            recover(TESTNET_CHAIN_ID, SENDER_RECOVERY_FROM_BLOCK, SENDER_RECOVERY_TOKEN, vec![
+            recover(TESTNET_CHAIN_ID, SENDER_RECOVERY_BLOCKS.start, SENDER_RECOVERY_TOKEN, vec![
                 approval
             ]),
             None
@@ -134,7 +146,7 @@ mod tests {
         let one = address!("0000000000000000000000000000000000000001");
         let logs = vec![transfer_log(SENDER_RECOVERY_TOKEN, one, HOLDER_A)];
         assert_eq!(
-            recover(TESTNET_CHAIN_ID, SENDER_RECOVERY_FROM_BLOCK, SENDER_RECOVERY_TOKEN, logs),
+            recover(TESTNET_CHAIN_ID, SENDER_RECOVERY_BLOCKS.start, SENDER_RECOVERY_TOKEN, logs),
             None
         );
     }

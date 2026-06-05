@@ -13,6 +13,20 @@ Ensure careful handling when indexing.
 
 To disable this behavior, add `--hl-node-compliant` to the CLI arguments-this will not show system transactions and their receipts, mimicking hl-node's output.
 
+### System transaction sender encoding
+
+System transactions arrive from hl-node unsigned; nanoreth fabricates a signature that encodes the real `msg.sender` into its `s` value. Sender recovery decodes it back:
+
+| `s` | recovered `msg.sender` |
+| --- | --- |
+| `1` | `0x2222...2222` (the HYPE system address) |
+| `0x10000000000000000000000000000000000000001` | `0x00...01` |
+| anything else | the low 20 bytes of `s` (e.g. spot-token `0x2000...00` senders) |
+
+The middle row is an escape: a real sender of `0x00...01` would otherwise encode to `s == 1` and collide with the HYPE sentinel, so it is lifted to `(1 << 160) | 1` (which still decodes back via the low 20 bytes).
+
+The RPC returns this recovered address as each transaction's `from`; together with the zero `gasPrice` and the table above, that lets you recognize system transactions. To confirm them authoritatively, use hl-node's [`eth_getSystemTxsByBlockHash` / `eth_getSystemTxsByBlockNumber`](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/hyperevm/json-rpc) methods, which return the system transactions originating from HyperCore, and source blocks only from a node you trust.
+
 ### Per-request compliance multiplexing
 
 If you need a single endpoint to serve both filtered and unfiltered responses, use `--hl-node-compliant-multiplexed`. This adds a middleware layer that reads the `?hl=` query parameter from each request:

@@ -10,7 +10,7 @@ use alloy_consensus::{
 };
 use alloy_eips::Encodable2718;
 use alloy_network::TxSigner;
-use alloy_primitives::{Address, TxHash, U256, address};
+use alloy_primitives::{Address, TxHash, U256, address, uint};
 use alloy_rpc_types::{Transaction, TransactionInfo, TransactionRequest};
 use alloy_signer::Signature;
 use reth_codecs::alloy::transaction::{Envelope, FromTxCompact};
@@ -39,13 +39,37 @@ pub enum TransactionSigned {
     Default(InnerType),
 }
 
+/// The HYPE system address (sender of native HYPE transfer system txs), encoded as `s == 1`.
+/// <https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/hyperevm/hypercore-less-than-greater-than-hyperevm-transfers>
+const HYPE_SYSTEM_ADDRESS: Address = address!("2222222222222222222222222222222222222222");
+
+/// 0x00..01: its natural encoding `s == 1` would collide with [`HYPE_SYSTEM_ADDRESS`], so it is
+/// escaped to [`ADDRESS_ONE_S`].
+const ADDRESS_ONE: Address = address!("0000000000000000000000000000000000000001");
+
+/// The escaped `s` for [`ADDRESS_ONE`]: `(1 << 160) | 1`, one bit above the 20-byte address space.
+const ADDRESS_ONE_S: U256 = uint!(0x10000000000000000000000000000000000000001_U256);
+
+/// Decode a system tx's synthetic signature `s` into `msg.sender`; inverse of [`address_to_s`].
 fn s_to_address(s: U256) -> Address {
     if s == U256::ONE {
-        return address!("2222222222222222222222222222222222222222");
+        return HYPE_SYSTEM_ADDRESS;
     }
-    let mut buf = [0u8; 20];
-    buf[0..20].copy_from_slice(&s.to_be_bytes::<32>()[12..32]);
-    Address::from_slice(&buf)
+    if s == ADDRESS_ONE_S {
+        return ADDRESS_ONE;
+    }
+    Address::from_slice(&s.to_be_bytes::<32>()[12..])
+}
+
+/// Encode `msg.sender` into a system tx's synthetic signature `s`; inverse of [`s_to_address`].
+pub(crate) fn address_to_s(addr: Address) -> U256 {
+    if addr == HYPE_SYSTEM_ADDRESS {
+        return U256::ONE;
+    }
+    if addr == ADDRESS_ONE {
+        return ADDRESS_ONE_S;
+    }
+    U256::from_be_slice(addr.as_slice())
 }
 
 impl TxHashRef for TransactionSigned {
