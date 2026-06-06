@@ -16,7 +16,7 @@ use super::patch::recover_testnet_system_tx_sender;
 use crate::{
     HlBlock, HlBlockBody, HlHeader,
     node::{
-        primitives::TransactionSigned as TxSigned,
+        primitives::{TransactionSigned as TxSigned, transaction::address_to_s},
         spot_meta::{SpotId, erc20_contract_to_spot_token},
         types::{LegacyReceipt, ReadPrecompileCalls, SystemTx},
     },
@@ -191,18 +191,18 @@ fn system_tx_to_reth_transaction(
     let TxKind::Call(to) = tx.to else {
         panic!("Unexpected contract creation");
     };
-    let s = if let Some(sender) = recover_testnet_system_tx_sender(
-        chain_id,
-        block_number,
-        to,
-        transaction.receipt.as_ref(),
-    ) {
-        // Encode the real `msg.sender` (recovered from the ERC-20 `Transfer` log) into
-        // `s`, so that `s_to_address(s)` recovers the actual holder. This lets each
-        // sender's nonces validate normally, removing the need to disable nonce checks
-        // for these system transactions.
-        U256::from_be_slice(sender.as_slice())
+    // System txs arrive unsigned; nanoreth fabricates the signature below, encoding `msg.sender`
+    // into `s` (via `address_to_s`) so `s_to_address(s)` recovers the holder and nonces validate.
+    let s = if let Some(sender) = transaction.from {
+        // Prefer the authoritative upstream `from`.
+        address_to_s(sender)
+    } else if let Some(sender) =
+        recover_testnet_system_tx_sender(chain_id, block_number, to, transaction.receipt.as_ref())
+    {
+        // Fall back to `super::patch` testnet log recovery.
+        address_to_s(sender)
     } else if tx.input.is_empty() {
+        // Native HYPE transfer: sender is the HYPE system address (0x2222…2222), encoded `s == 1`.
         U256::from(0x1)
     } else {
         loop {
@@ -326,6 +326,8 @@ mod tests {
                 input: Bytes::from_static(&[0xa9, 0x05, 0x9c, 0xbb]),
             }),
             receipt: Some(receipt),
+            // `from` path set explicitly per-test.
+            from: None,
         }
     }
 
@@ -341,5 +343,81 @@ mod tests {
         let tx2 = system_tx(HOLDER_A, TOKEN, 0);
         let signed2 = system_tx_to_reth_transaction(&tx2, TESTNET_CHAIN_ID, FROM_BLOCK);
         assert_eq!(signed2.recover_signer().unwrap(), HOLDER_A);
+    }
+
+    #[test]
+    fn from_field_takes_precedence_over_log() {
+        // On disagreement, upstream `from` wins over the `Transfer` log.
+        let mut tx = system_tx(HOLDER_A, TOKEN, 3);
+        tx.from = Some(HOLDER_B);
+        let signed = system_tx_to_reth_transaction(&tx, TESTNET_CHAIN_ID, FROM_BLOCK);
+        assert_eq!(signed.recover_signer().unwrap(), HOLDER_B);
+    }
+
+    #[test]
+    fn from_db_round_trip_preserves_real_holder() {
+        // A `from`-bearing system tx past the log-recovery window survives the sync round trip
+        // (to_reth_block -> from_db -> to_reth_block) recovering the real holder, not a collision.
+        let mut tx = system_tx(HOLDER_A, TOKEN, 1);
+        tx.from = Some(HOLDER_B);
+        assert_eq!(round_trip_signer(tx), HOLDER_B);
+    }
+
+    #[test]
+    fn from_db_round_trip_preserves_hype_sender() {
+        // A native HYPE transfer (empty input, sender = HYPE system address -> `s == 1`) recovers
+        // to 0x2222…2222 and re-encodes back to `s == 1` across the round trip - no drift.
+        let receipt: LegacyReceipt = EthereumReceipt {
+            tx_type: TxType::Legacy,
+            success: true,
+            cumulative_gas_used: 0,
+            logs: vec![],
+        }
+        .into();
+        let tx = SystemTx {
+            tx: Transaction::Legacy(TxLegacy {
+                chain_id: Some(TESTNET_CHAIN_ID),
+                nonce: 0,
+                gas_price: 0,
+                gas_limit: 200_000,
+                to: TxKind::Call(TOKEN),
+                value: U256::ZERO,
+                input: Bytes::new(),
+            }),
+            receipt: Some(receipt),
+            from: None,
+        };
+        assert_eq!(round_trip_signer(tx), address!("2222222222222222222222222222222222222222"));
+    }
+
+    #[test]
+    fn degenerate_from_one_is_escaped_and_round_trips() {
+        // `from == 0x00..01` would collide with the `s == 1` sentinel; the escape lifts it above
+        // the address space so it recovers to 0x00..01 (not the 0x2222 sentinel) and round-trips.
+        let one = address!("0000000000000000000000000000000000000001");
+        let mut tx = system_tx(HOLDER_A, TOKEN, 1);
+        tx.from = Some(one);
+        let signed = system_tx_to_reth_transaction(&tx, TESTNET_CHAIN_ID, FROM_BLOCK);
+        assert_eq!(signed.recover_signer().unwrap(), one);
+        assert_eq!(round_trip_signer(tx), one);
+    }
+
+    /// Full sync round trip (to_reth_block -> from_db -> to_reth_block); returns the re-served
+    /// system tx's recovered signer, which must equal the original's.
+    fn round_trip_signer(tx: SystemTx) -> Address {
+        let sealed = SealedBlock {
+            header: SealedHeader {
+                hash: Default::default(),
+                header: Header { number: 56_000_000, ..Default::default() },
+            },
+            body: BlockBody { transactions: vec![], ommers: vec![], withdrawals: None },
+        };
+        let receipts = vec![tx.receipt.clone().unwrap().into()];
+        let block =
+            sealed.to_reth_block(Default::default(), None, vec![tx], vec![], TESTNET_CHAIN_ID);
+        let restored = crate::node::types::BlockAndReceipts::from_db(block, receipts);
+        assert_eq!(restored.system_txs.len(), 1);
+        let reserved = restored.to_reth_block(TESTNET_CHAIN_ID);
+        reserved.body.inner.transactions[0].recover_signer().unwrap()
     }
 }
