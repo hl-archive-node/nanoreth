@@ -15,8 +15,7 @@ use alloy_eips::{BlockId, BlockNumberOrTag};
 use alloy_json_rpc::RpcObject;
 use alloy_primitives::{B256, U256};
 use alloy_rpc_types::{
-    BlockTransactions, Filter, FilterChanges, FilterId, Log, PendingTransactionFilterKind,
-    TransactionInfo,
+    BlockTransactions, Filter, FilterChanges, FilterId, Log, TransactionInfo,
     pubsub::{Params, SubscriptionKind},
 };
 use jsonrpsee::{PendingSubscriptionSink, proc_macros::rpc};
@@ -27,8 +26,8 @@ use reth_primitives_traits::SignedTransaction;
 use reth_provider::{BlockIdReader, BlockReader, BlockReaderIdExt, ReceiptProvider};
 use reth_rpc::{EthFilter, EthPubSub};
 use reth_rpc_eth_api::{
-    EthApiTypes, EthFilterApiServer, EthPubSubApiServer, RpcBlock, RpcConvert, RpcReceipt,
-    RpcTransaction, helpers::{EthBlocks, EthTransactions}, transaction::ConvertReceiptInput,
+    EthApiTypes, EthFilterApiServer, RpcBlock, RpcConvert, RpcReceipt, RpcTransaction,
+    helpers::{EthBlocks, EthTransactions}, transaction::ConvertReceiptInput,
 };
 use reth_rpc_eth_types::EthApiError;
 use serde::{Deserialize, Serialize};
@@ -261,58 +260,81 @@ where
 pub struct HlNodeFilterHttp<Eth: EthWrapper> {
     filter: Arc<EthFilter<Eth>>,
     provider: Arc<Eth::Provider>,
+    default_compliant: bool,
 }
 
 impl<Eth: EthWrapper> HlNodeFilterHttp<Eth> {
-    pub fn new(filter: Arc<EthFilter<Eth>>, provider: Arc<Eth::Provider>) -> Self {
-        Self { filter, provider }
+    pub fn new(
+        filter: Arc<EthFilter<Eth>>,
+        provider: Arc<Eth::Provider>,
+        default_compliant: bool,
+    ) -> Self {
+        Self { filter, provider, default_compliant }
+    }
+}
+
+/// Per-request `?hl=`-aware overrides of the log-returning `eth_` filter methods. Other filter
+/// methods are left to the stock reth handler (`EthFilter` clones share state via `Arc`).
+#[rpc(server, namespace = "eth")]
+pub trait EthLogFilterApi<T: RpcObject> {
+    #[method(name = "getLogs", with_extensions)]
+    async fn logs(&self, filter: Filter) -> RpcResult<Vec<Log>>;
+
+    #[method(name = "getFilterLogs", with_extensions)]
+    async fn filter_logs(&self, id: FilterId) -> RpcResult<Vec<Log>>;
+
+    #[method(name = "getFilterChanges", with_extensions)]
+    async fn filter_changes(&self, id: FilterId) -> RpcResult<FilterChanges<T>>;
+}
+
+fn adjust_filter_changes<Eth: EthWrapper>(
+    changes: FilterChanges<RpcTransaction<Eth::NetworkTypes>>,
+    provider: &Eth::Provider,
+) -> FilterChanges<RpcTransaction<Eth::NetworkTypes>> {
+    match changes {
+        FilterChanges::Logs(logs) => FilterChanges::Logs(
+            logs.into_iter().filter_map(|log| adjust_log::<Eth>(log, provider)).collect(),
+        ),
+        other => other,
     }
 }
 
 #[async_trait]
-impl<Eth: EthWrapper> EthFilterApiServer<RpcTransaction<Eth::NetworkTypes>>
+impl<Eth: EthWrapper> EthLogFilterApiServer<RpcTransaction<Eth::NetworkTypes>>
     for HlNodeFilterHttp<Eth>
 {
-    async fn new_filter(&self, filter: Filter) -> RpcResult<FilterId> {
-        trace!(target: "rpc::eth", "Serving eth_newFilter");
-        self.filter.new_filter(filter).await
+    async fn logs(&self, ext: &Extensions, filter: Filter) -> RpcResult<Vec<Log>> {
+        trace!(target: "rpc::eth", "Serving eth_getLogs");
+        let logs = EthFilterApiServer::logs(&*self.filter, filter).await?;
+        if is_hl_compliant(ext, self.default_compliant) {
+            Ok(logs.into_iter().filter_map(|log| adjust_log::<Eth>(log, &self.provider)).collect())
+        } else {
+            Ok(logs)
+        }
     }
 
-    async fn new_block_filter(&self) -> RpcResult<FilterId> {
-        trace!(target: "rpc::eth", "Serving eth_newBlockFilter");
-        self.filter.new_block_filter().await
-    }
-
-    async fn new_pending_transaction_filter(
-        &self,
-        kind: Option<PendingTransactionFilterKind>,
-    ) -> RpcResult<FilterId> {
-        trace!(target: "rpc::eth", "Serving eth_newPendingTransactionFilter");
-        self.filter.new_pending_transaction_filter(kind).await
+    async fn filter_logs(&self, ext: &Extensions, id: FilterId) -> RpcResult<Vec<Log>> {
+        trace!(target: "rpc::eth", "Serving eth_getFilterLogs");
+        let logs = self.filter.filter_logs(id).await.map_err(ErrorObject::from)?;
+        if is_hl_compliant(ext, self.default_compliant) {
+            Ok(logs.into_iter().filter_map(|log| adjust_log::<Eth>(log, &self.provider)).collect())
+        } else {
+            Ok(logs)
+        }
     }
 
     async fn filter_changes(
         &self,
+        ext: &Extensions,
         id: FilterId,
     ) -> RpcResult<FilterChanges<RpcTransaction<Eth::NetworkTypes>>> {
         trace!(target: "rpc::eth", "Serving eth_getFilterChanges");
-        self.filter.filter_changes(id).await.map_err(ErrorObject::from)
-    }
-
-    async fn filter_logs(&self, id: FilterId) -> RpcResult<Vec<Log>> {
-        trace!(target: "rpc::eth", "Serving eth_getFilterLogs");
-        self.filter.filter_logs(id).await.map_err(ErrorObject::from)
-    }
-
-    async fn uninstall_filter(&self, id: FilterId) -> RpcResult<bool> {
-        trace!(target: "rpc::eth", "Serving eth_uninstallFilter");
-        self.filter.uninstall_filter(id).await
-    }
-
-    async fn logs(&self, filter: Filter) -> RpcResult<Vec<Log>> {
-        trace!(target: "rpc::eth", "Serving eth_getLogs");
-        let logs = EthFilterApiServer::logs(&*self.filter, filter).await?;
-        Ok(logs.into_iter().filter_map(|log| adjust_log::<Eth>(log, &self.provider)).collect())
+        let changes = self.filter.filter_changes(id).await.map_err(ErrorObject::from)?;
+        if is_hl_compliant(ext, self.default_compliant) {
+            Ok(adjust_filter_changes::<Eth>(changes, &self.provider))
+        } else {
+            Ok(changes)
+        }
     }
 }
 
@@ -320,6 +342,7 @@ pub struct HlNodeFilterWs<Eth: EthWrapper> {
     pubsub: Arc<EthPubSub<Eth>>,
     provider: Arc<Eth::Provider>,
     subscription_task_spawner: Box<dyn TaskSpawner + 'static>,
+    default_compliant: bool,
 }
 
 impl<Eth: EthWrapper> HlNodeFilterWs<Eth> {
@@ -327,22 +350,42 @@ impl<Eth: EthWrapper> HlNodeFilterWs<Eth> {
         pubsub: Arc<EthPubSub<Eth>>,
         provider: Arc<Eth::Provider>,
         subscription_task_spawner: Box<dyn TaskSpawner + 'static>,
+        default_compliant: bool,
     ) -> Self {
-        Self { pubsub, provider, subscription_task_spawner }
+        Self { pubsub, provider, subscription_task_spawner, default_compliant }
     }
 }
 
+/// Per-request `?hl=`-aware `eth_subscribe`; only `logs` subscriptions are filtered.
+#[rpc(server, namespace = "eth")]
+pub trait EthHlPubSubApi {
+    #[subscription(
+        name = "subscribe" => "subscription",
+        unsubscribe = "unsubscribe",
+        item = alloy_rpc_types::pubsub::SubscriptionResult,
+        with_extensions
+    )]
+    async fn subscribe(
+        &self,
+        kind: SubscriptionKind,
+        params: Option<Params>,
+    ) -> jsonrpsee::core::SubscriptionResult;
+}
+
 #[async_trait]
-impl<Eth: EthWrapper> EthPubSubApiServer<RpcTransaction<Eth::NetworkTypes>> for HlNodeFilterWs<Eth>
+impl<Eth: EthWrapper> EthHlPubSubApiServer for HlNodeFilterWs<Eth>
 where
     jsonrpsee_types::error::ErrorObject<'static>: From<<Eth as EthApiTypes>::Error>,
 {
     async fn subscribe(
         &self,
         pending: PendingSubscriptionSink,
+        ext: &Extensions,
         kind: SubscriptionKind,
         params: Option<Params>,
     ) -> jsonrpsee::core::SubscriptionResult {
+        // resolve before spawning; `ext` is borrowed
+        let compliant = is_hl_compliant(ext, self.default_compliant);
         let sink = pending.accept().await?;
         let (pubsub, provider) = (self.pubsub.clone(), self.provider.clone());
         self.subscription_task_spawner.spawn(Box::pin(async move {
@@ -352,11 +395,17 @@ where
                     Some(Params::Bool(_)) => return,
                     _ => Default::default(),
                 };
-                let _ = pipe_from_stream(
-                    sink,
-                    pubsub.log_stream(filter).filter_map(|log| adjust_log::<Eth>(log, &provider)),
-                )
-                .await;
+                if compliant {
+                    let _ = pipe_from_stream(
+                        sink,
+                        pubsub
+                            .log_stream(filter)
+                            .filter_map(|log| adjust_log::<Eth>(log, &provider)),
+                    )
+                    .await;
+                } else {
+                    let _ = pipe_from_stream(sink, pubsub.log_stream(filter)).await;
+                }
             } else if kind == SubscriptionKind::NewHeads {
                 let _ = pipe_from_stream(sink, new_headers_stream::<Eth>(&provider)).await;
             } else {
@@ -767,23 +816,25 @@ where
     EthApi: EthWrapper,
     ErrorObject<'static>: From<EthApi::Error>,
 {
-    if default_compliant {
-        ctx.modules.replace_configured(
-            HlNodeFilterHttp::new(
-                Arc::new(ctx.registry.eth_handlers().filter.clone()),
-                Arc::new(ctx.registry.eth_api().provider().clone()),
-            )
-            .into_rpc(),
-        )?;
-        ctx.modules.replace_configured(
-            HlNodeFilterWs::new(
-                Arc::new(ctx.registry.eth_handlers().pubsub.clone()),
-                Arc::new(ctx.registry.eth_api().provider().clone()),
-                Box::new(ctx.node().task_executor().clone()),
-            )
-            .into_rpc(),
-        )?;
-    }
+    // Installed unconditionally so `?hl=` works in both directions; absent the extension,
+    // `is_hl_compliant` falls back to `default_compliant`.
+    ctx.modules.replace_configured(
+        HlNodeFilterHttp::new(
+            Arc::new(ctx.registry.eth_handlers().filter.clone()),
+            Arc::new(ctx.registry.eth_api().provider().clone()),
+            default_compliant,
+        )
+        .into_rpc(),
+    )?;
+    ctx.modules.replace_configured(
+        HlNodeFilterWs::new(
+            Arc::new(ctx.registry.eth_handlers().pubsub.clone()),
+            Arc::new(ctx.registry.eth_api().provider().clone()),
+            Box::new(ctx.node().task_executor().clone()),
+            default_compliant,
+        )
+        .into_rpc(),
+    )?;
 
     ctx.modules.replace_configured(
         HlNodeBlockFilterHttp::new(Arc::new(ctx.registry.eth_api().clone()), default_compliant)
