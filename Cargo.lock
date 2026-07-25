@@ -9440,8 +9440,7 @@ dependencies = [
 [[package]]
 name = "revm"
 version = "29.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "718d90dce5f07e115d0e66450b1b8aa29694c1cf3f89ebddaddccc2ccbd2f13e"
+source = "git+https://github.com/hl-archive-node/revm?rev=fdf9b16bdd4388a680c97440c6e7f085647ece01#fdf9b16bdd4388a680c97440c6e7f085647ece01"
 dependencies = [
  "revm-bytecode",
  "revm-context",
@@ -9459,8 +9458,7 @@ dependencies = [
 [[package]]
 name = "revm-bytecode"
 version = "6.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "66c52031b73cae95d84cd1b07725808b5fd1500da3e5e24574a3b2dc13d9f16d"
+source = "git+https://github.com/hl-archive-node/revm?rev=fdf9b16bdd4388a680c97440c6e7f085647ece01#fdf9b16bdd4388a680c97440c6e7f085647ece01"
 dependencies = [
  "bitvec",
  "phf",
@@ -9471,8 +9469,7 @@ dependencies = [
 [[package]]
 name = "revm-context"
 version = "9.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5a20c98e7008591a6f012550c2a00aa36cba8c14cc88eb88dec32eb9102554b4"
+source = "git+https://github.com/hl-archive-node/revm?rev=fdf9b16bdd4388a680c97440c6e7f085647ece01#fdf9b16bdd4388a680c97440c6e7f085647ece01"
 dependencies = [
  "bitvec",
  "cfg-if",
@@ -9488,8 +9485,7 @@ dependencies = [
 [[package]]
 name = "revm-context-interface"
 version = "10.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b50d241ed1ce647b94caf174fcd0239b7651318b2c4c06b825b59b973dfb8495"
+source = "git+https://github.com/hl-archive-node/revm?rev=fdf9b16bdd4388a680c97440c6e7f085647ece01#fdf9b16bdd4388a680c97440c6e7f085647ece01"
 dependencies = [
  "alloy-eip2930",
  "alloy-eip7702",
@@ -9504,8 +9500,7 @@ dependencies = [
 [[package]]
 name = "revm-database"
 version = "7.0.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "39a276ed142b4718dcf64bc9624f474373ed82ef20611025045c3fb23edbef9c"
+source = "git+https://github.com/hl-archive-node/revm?rev=fdf9b16bdd4388a680c97440c6e7f085647ece01#fdf9b16bdd4388a680c97440c6e7f085647ece01"
 dependencies = [
  "alloy-eips",
  "revm-bytecode",
@@ -9518,8 +9513,7 @@ dependencies = [
 [[package]]
 name = "revm-database-interface"
 version = "7.0.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8c523c77e74eeedbac5d6f7c092e3851dbe9c7fec6f418b85992bd79229db361"
+source = "git+https://github.com/hl-archive-node/revm?rev=fdf9b16bdd4388a680c97440c6e7f085647ece01#fdf9b16bdd4388a680c97440c6e7f085647ece01"
 dependencies = [
  "auto_impl",
  "either",
@@ -9531,8 +9525,7 @@ dependencies = [
 [[package]]
 name = "revm-handler"
 version = "10.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "550331ea85c1d257686e672081576172fe3d5a10526248b663bbf54f1bef226a"
+source = "git+https://github.com/hl-archive-node/revm?rev=fdf9b16bdd4388a680c97440c6e7f085647ece01#fdf9b16bdd4388a680c97440c6e7f085647ece01"
 dependencies = [
  "auto_impl",
  "derive-where",
@@ -9550,8 +9543,7 @@ dependencies = [
 [[package]]
 name = "revm-inspector"
 version = "10.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7c0a6e9ccc2ae006f5bed8bd80cd6f8d3832cd55c5e861b9402fdd556098512f"
+source = "git+https://github.com/hl-archive-node/revm?rev=fdf9b16bdd4388a680c97440c6e7f085647ece01#fdf9b16bdd4388a680c97440c6e7f085647ece01"
 dependencies = [
  "auto_impl",
  "either",
@@ -9588,8 +9580,7 @@ dependencies = [
 [[package]]
 name = "revm-interpreter"
 version = "25.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "06575dc51b1d8f5091daa12a435733a90b4a132dca7ccee0666c7db3851bc30c"
+source = "git+https://github.com/hl-archive-node/revm?rev=fdf9b16bdd4388a680c97440c6e7f085647ece01#fdf9b16bdd4388a680c97440c6e7f085647ece01"
 dependencies = [
  "revm-bytecode",
  "revm-context-interface",
@@ -9600,8 +9591,7 @@ dependencies = [
 [[package]]
 name = "revm-precompile"
 version = "27.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "25b57d4bd9e6b5fe469da5452a8a137bc2d030a3cd47c46908efc615bbc699da"
+source = "git+https://github.com/hl-archive-node/revm?rev=fdf9b16bdd4388a680c97440c6e7f085647ece01#fdf9b16bdd4388a680c97440c6e7f085647ece01"
 dependencies = [
  "ark-bls12-381",
  "ark-bn254",
@@ -9626,8 +9616,7 @@ dependencies = [
 [[package]]
 name = "revm-primitives"
 version = "20.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5aa29d9da06fe03b249b6419b33968ecdf92ad6428e2f012dc57bcd619b5d94e"
+source = "git+https://github.com/hl-archive-node/revm?rev=fdf9b16bdd4388a680c97440c6e7f085647ece01#fdf9b16bdd4388a680c97440c6e7f085647ece01"
 dependencies = [
  "alloy-primitives",
  "num_enum",
@@ -9638,8 +9627,7 @@ dependencies = [
 [[package]]
 name = "revm-state"
 version = "7.0.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1f64fbacb86008394aaebd3454f9643b7d5a782bd251135e17c5b33da592d84d"
+source = "git+https://github.com/hl-archive-node/revm?rev=fdf9b16bdd4388a680c97440c6e7f085647ece01#fdf9b16bdd4388a680c97440c6e7f085647ece01"
 dependencies = [
  "bitflags 2.9.2",
  "revm-bytecode",
