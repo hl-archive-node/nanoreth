@@ -184,3 +184,23 @@ tempfile = "3.20.0"
 [build-dependencies]
 vergen = { version = "9.0.4", features = ["build", "cargo", "emit_and_set"] }
 vergen-git2 = "1.0.5"
+# Backport of bluealloy/revm#3805: the inspector could emit a SELFDESTRUCT callback built
+# from an unrelated journal entry, so callTracer and trace_replayTransaction reported
+# transfers that never happened. Execution, state and receipts are unaffected.
+#
+# All revm crates are pinned together: revm-inspector depends on its siblings by path
+# within the monorepo, so patching it alone pulls in duplicate copies and fails to
+# compile. Drop this block once reth carries the fix.
+[patch.crates-io]
+revm = { git = "https://github.com/hl-archive-node/revm", rev = "fdf9b16bdd4388a680c97440c6e7f085647ece01" }
+revm-bytecode = { git = "https://github.com/hl-archive-node/revm", rev = "fdf9b16bdd4388a680c97440c6e7f085647ece01" }
+revm-context = { git = "https://github.com/hl-archive-node/revm", rev = "fdf9b16bdd4388a680c97440c6e7f085647ece01" }
+revm-context-interface = { git = "https://github.com/hl-archive-node/revm", rev = "fdf9b16bdd4388a680c97440c6e7f085647ece01" }
+revm-database = { git = "https://github.com/hl-archive-node/revm", rev = "fdf9b16bdd4388a680c97440c6e7f085647ece01" }
+revm-database-interface = { git = "https://github.com/hl-archive-node/revm", rev = "fdf9b16bdd4388a680c97440c6e7f085647ece01" }
+revm-handler = { git = "https://github.com/hl-archive-node/revm", rev = "fdf9b16bdd4388a680c97440c6e7f085647ece01" }
+revm-inspector = { git = "https://github.com/hl-archive-node/revm", rev = "fdf9b16bdd4388a680c97440c6e7f085647ece01" }
+revm-interpreter = { git = "https://github.com/hl-archive-node/revm", rev = "fdf9b16bdd4388a680c97440c6e7f085647ece01" }
+revm-precompile = { git = "https://github.com/hl-archive-node/revm", rev = "fdf9b16bdd4388a680c97440c6e7f085647ece01" }
+revm-primitives = { git = "https://github.com/hl-archive-node/revm", rev = "fdf9b16bdd4388a680c97440c6e7f085647ece01" }
+revm-state = { git = "https://github.com/hl-archive-node/revm", rev = "fdf9b16bdd4388a680c97440c6e7f085647ece01" }
