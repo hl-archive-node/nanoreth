@@ -89,3 +89,64 @@ echo "$TRACE_RESULT" | jq -e \
     ($hashes | index($success) != null)
     ' > /dev/null \
     && success "$TITLE" || fail "$TITLE - trace_block missing expected tx hashes"
+
+TITLE="Issue #143 - unknown/unavailable blocks must return null instead of panicking"
+UNKNOWN_HASH=0x1111111111111111111111111111111111111111111111111111111111111111
+FUTURE_BLOCK=0x7fffffffff
+for REQ in \
+    "eth_getBlockReceipts:[\"$UNKNOWN_HASH\"]" \
+    "eth_getBlockReceipts:[\"$FUTURE_BLOCK\"]" \
+    "eth_getBlockByHash:[\"$UNKNOWN_HASH\",false]" \
+    "eth_getBlockByNumber:[\"$FUTURE_BLOCK\",false]" \
+    "eth_getBlockTransactionCountByHash:[\"$UNKNOWN_HASH\"]" \
+    "eth_getBlockTransactionCountByNumber:[\"$FUTURE_BLOCK\"]" \
+    "eth_getTransactionReceipt:[\"$UNKNOWN_HASH\"]" \
+    ; do
+    METHOD=${REQ%%:*}
+    PARAMS=${REQ#*:}
+    RESULT=$(curl -sS -H 'content-type: application/json' \
+        -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"$METHOD\",\"params\":$PARAMS}" \
+        "$ETH_RPC_URL")
+    echo "$RESULT" | jq -e '(.error | not) and (.result == null)' > /dev/null \
+        || fail "$TITLE - $METHOD returned $RESULT"
+done
+success "$TITLE"
+
+TITLE="Issue #143 - the pending tag must not panic (locally built pending block has no header)"
+for METHOD in eth_getBlockByNumber eth_getBlockTransactionCountByNumber; do
+    PARAMS='["pending",false]'
+    [[ "$METHOD" == eth_getBlockTransactionCountByNumber ]] && PARAMS='["pending"]'
+    RESULT=$(curl -sS -H 'content-type: application/json' \
+        -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"$METHOD\",\"params\":$PARAMS}" \
+        "$ETH_RPC_URL")
+    echo "$RESULT" | jq -e '(.error | not) and has("result")' > /dev/null \
+        || fail "$TITLE - $METHOD returned $RESULT"
+done
+success "$TITLE"
+
+TITLE="Issue #143 - a system tx receipt must return null instead of panicking"
+# System txs are hidden in compliant mode, so their index is below the block's system tx count
+# and the adjusted index used to underflow. Walk back from the head until a block with system
+# txs turns up; they are sparse on testnet, so allow the window to be widened.
+SCAN_FROM=${SYSTEM_TX_SCAN_FROM:-$(curl -sS -H 'content-type: application/json' \
+    -d '{"jsonrpc":"2.0","id":1,"method":"eth_blockNumber","params":[]}' "$ETH_RPC_URL" \
+    | jq -r '.result' | { read -r hex; printf '%d' "$hex"; })}
+SCAN_BLOCKS=${SYSTEM_TX_SCAN_BLOCKS:-2000}
+SYSTEM_TX=""
+for ((i = 0; i < SCAN_BLOCKS; i++)); do
+    BLOCK=$(printf '0x%x' $((SCAN_FROM - i)))
+    SYSTEM_TX=$(curl -sS -H 'content-type: application/json' \
+        -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"eth_getBlockReceiptsWithSystemTx\",\"params\":[\"$BLOCK\"]}" \
+        "$ETH_RPC_URL" | jq -r '.result.systemTxReceipts[0].transactionHash // empty')
+    [[ -n "$SYSTEM_TX" ]] && break
+done
+if [[ -n "$SYSTEM_TX" ]]; then
+    RESULT=$(curl -sS -H 'content-type: application/json' \
+        -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"eth_getTransactionReceipt\",\"params\":[\"$SYSTEM_TX\"]}" \
+        "$ETH_RPC_URL")
+    echo "$RESULT" | jq -e '(.error | not) and (.result == null)' > /dev/null \
+        && success "$TITLE ($SYSTEM_TX)" || fail "$TITLE - $SYSTEM_TX returned $RESULT"
+else
+    echo "Skipped: $TITLE - no system tx in the last $SCAN_BLOCKS blocks;" \
+        "set SYSTEM_TX_SCAN_FROM/SYSTEM_TX_SCAN_BLOCKS to widen the search"
+fi
