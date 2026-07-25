@@ -26,7 +26,8 @@ use reth_primitives_traits::SignedTransaction;
 use reth_provider::{BlockIdReader, BlockReader, BlockReaderIdExt, ReceiptProvider};
 use reth_rpc::{EthFilter, EthPubSub};
 use reth_rpc_eth_api::{
-    EthApiTypes, EthFilterApiServer, RpcBlock, RpcConvert, RpcReceipt, RpcTransaction,
+    EthApiTypes, EthFilterApiServer, FromEthApiError, RpcBlock, RpcConvert, RpcReceipt,
+    RpcTransaction,
     helpers::{EthBlocks, EthTransactions}, transaction::ConvertReceiptInput,
 };
 use reth_rpc_eth_types::EthApiError;
@@ -418,7 +419,9 @@ where
 
 fn adjust_log<Eth: EthWrapper>(mut log: Log, provider: &Eth::Provider) -> Option<Log> {
     let (tx_idx, log_idx) = (log.transaction_index?, log.log_index?);
-    let receipts = provider.receipts_by_block(log.block_number?.into()).unwrap()?;
+    // Without the block's receipts the log cannot be filtered, so it is dropped rather than
+    // served unadjusted.
+    let receipts = provider.receipts_by_block(log.block_number?.into()).ok()??;
     let (mut sys_tx_count, mut sys_log_count) = (0u64, 0u64);
     for receipt in receipts {
         if receipt.cumulative_gas_used() == 0 {
@@ -486,11 +489,16 @@ macro_rules! engine_span {
     };
 }
 
+/// Returns `None` if the header of the block is not available, i.e. the block cannot be filtered.
 fn adjust_block<Eth: EthWrapper>(
     recovered_block: &RpcBlock<Eth::NetworkTypes>,
     eth_api: &Eth,
-) -> RpcBlock<Eth::NetworkTypes> {
-    let system_tx_count = system_tx_count_for_block(eth_api, recovered_block.number().into());
+) -> Result<Option<RpcBlock<Eth::NetworkTypes>>, Eth::Error> {
+    let Some(system_tx_count) =
+        system_tx_count_for_block(eth_api, recovered_block.number().into())?
+    else {
+        return Ok(None);
+    };
     let mut new_block = recovered_block.clone();
 
     new_block.transactions = match new_block.transactions {
@@ -509,7 +517,7 @@ fn adjust_block<Eth: EthWrapper>(
         }
         BlockTransactions::Uncle => BlockTransactions::Uncle,
     };
-    new_block
+    Ok(Some(new_block))
 }
 
 async fn adjust_block_receipts<Eth: EthWrapper>(
@@ -517,7 +525,9 @@ async fn adjust_block_receipts<Eth: EthWrapper>(
     eth_api: &Eth,
 ) -> Result<Option<(usize, Vec<RpcReceipt<Eth::NetworkTypes>>)>, Eth::Error> {
     // Modified from EthBlocks::block_receipt. See `NOTE` comment below.
-    let system_tx_count = system_tx_count_for_block(eth_api, block_id);
+    let Some(system_tx_count) = system_tx_count_for_block(eth_api, block_id)? else {
+        return Ok(None);
+    };
     if let Some((block, receipts)) = EthBlocks::load_block_and_receipts(eth_api, block_id).await? {
         let block_number = block.number;
         let base_fee = block.base_fee_per_gas;
@@ -532,8 +542,10 @@ async fn adjust_block_receipts<Eth: EthWrapper>(
             .zip(receipts.iter())
             .enumerate()
             .filter_map(|(idx, (tx, receipt))| {
-                if receipt.cumulative_gas_used() == 0 {
-                    // NOTE: modified to exclude system tx
+                // NOTE: modified to exclude system tx. They occupy the first `system_tx_count`
+                // positions, per the count recorded in the header extras, which is also what
+                // `block_receipts_with_system_txs` partitions on.
+                if idx < system_tx_count {
                     return None;
                 }
                 let meta = TransactionMeta {
@@ -574,7 +586,9 @@ async fn block_receipts_with_system_txs<Eth: EthWrapper>(
     block_id: BlockId,
     eth_api: &Eth,
 ) -> Result<Option<BlockReceiptsWithSystemTx<RpcReceipt<Eth::NetworkTypes>>>, Eth::Error> {
-    let system_tx_count = system_tx_count_for_block(eth_api, block_id);
+    let Some(system_tx_count) = system_tx_count_for_block(eth_api, block_id)? else {
+        return Ok(None);
+    };
     if let Some((block, receipts)) = EthBlocks::load_block_and_receipts(eth_api, block_id).await? {
         let block_number = block.number;
         let base_fee = block.base_fee_per_gas;
@@ -657,20 +671,33 @@ async fn adjust_transaction_receipt<Eth: EthWrapper>(
             let Some((system_tx_count, block_receipts)) =
                 adjust_block_receipts(meta.block_hash.into(), eth_api).await?
             else {
-                unreachable!();
+                // The block went away between the two lookups, or its header isn't available.
+                return Ok(None);
             };
-            Ok(Some(block_receipts.into_iter().nth(meta.index as usize - system_tx_count).unwrap()))
+            // System transactions are hidden in compliant mode, so their receipts are not served.
+            let Some(index) = (meta.index as usize).checked_sub(system_tx_count) else {
+                return Ok(None);
+            };
+            Ok(block_receipts.into_iter().nth(index))
         }
         None => Ok(None),
     }
 }
 
-// This function assumes that `block_id` is already validated by the caller.
-fn system_tx_count_for_block<Eth: EthWrapper>(eth_api: &Eth, block_id: BlockId) -> usize {
+/// Returns the number of system transactions in the block, or `None` if the header isn't
+/// available locally (unknown block id, or a block below the earliest block this node has).
+///
+/// `block_id` comes from user input, so it must not be assumed to be valid: without the system
+/// tx count we cannot filter the block, and the caller must report the block as unknown rather
+/// than serve unfiltered data.
+fn system_tx_count_for_block<Eth: EthWrapper>(
+    eth_api: &Eth,
+    block_id: BlockId,
+) -> Result<Option<usize>, Eth::Error> {
     let provider = eth_api.provider();
-    let header = provider.header_by_id(block_id).unwrap().unwrap();
+    let header = provider.header_by_id(block_id).map_err(Eth::Error::from_eth_err)?;
 
-    header.extras.system_tx_count.try_into().unwrap()
+    Ok(header.map(|header| header.extras.system_tx_count as usize))
 }
 
 #[async_trait]
@@ -689,7 +716,10 @@ where
     ) -> RpcResult<Option<RpcBlock<Eth::NetworkTypes>>> {
         let res = self.eth_api.block_by_hash(hash, full).instrument(engine_span!()).await?;
         if is_hl_compliant(ext, self.default_compliant) {
-            Ok(res.map(|block| adjust_block(&block, &*self.eth_api)))
+            match res {
+                Some(block) => Ok(adjust_block(&block, &*self.eth_api)?),
+                None => Ok(None),
+            }
         } else {
             Ok(res)
         }
@@ -705,7 +735,10 @@ where
         trace!(target: "rpc::eth", ?number, ?full, "Serving eth_getBlockByNumber");
         let res = self.eth_api.block_by_number(number, full).instrument(engine_span!()).await?;
         if is_hl_compliant(ext, self.default_compliant) {
-            Ok(res.map(|block| adjust_block(&block, &*self.eth_api)))
+            match res {
+                Some(block) => Ok(adjust_block(&block, &*self.eth_api)?),
+                None => Ok(None),
+            }
         } else {
             Ok(res)
         }
@@ -721,11 +754,13 @@ where
         let res =
             self.eth_api.block_transaction_count_by_hash(hash).instrument(engine_span!()).await?;
         if is_hl_compliant(ext, self.default_compliant) {
-            Ok(res.map(|count| {
-                let sys_tx_count =
-                    system_tx_count_for_block(&*self.eth_api, BlockId::Hash(hash.into()));
-                count - U256::from(sys_tx_count)
-            }))
+            let Some(count) = res else { return Ok(None) };
+            let Some(sys_tx_count) =
+                system_tx_count_for_block(&*self.eth_api, BlockId::Hash(hash.into()))?
+            else {
+                return Ok(None);
+            };
+            Ok(Some(count - U256::from(sys_tx_count)))
         } else {
             Ok(res)
         }
@@ -744,9 +779,12 @@ where
             .instrument(engine_span!())
             .await?;
         if is_hl_compliant(ext, self.default_compliant) {
-            Ok(res.map(|count| {
-                count - U256::from(system_tx_count_for_block(&*self.eth_api, number.into()))
-            }))
+            let Some(count) = res else { return Ok(None) };
+            let Some(sys_tx_count) = system_tx_count_for_block(&*self.eth_api, number.into())?
+            else {
+                return Ok(None);
+            };
+            Ok(Some(count - U256::from(sys_tx_count)))
         } else {
             Ok(res)
         }
