@@ -12,13 +12,9 @@ RUN apt-get update && apt-get -y upgrade && \
     apt-get install -y libclang-dev pkg-config m4 && \
     rm -rf /var/lib/apt/lists/*
 
-# revmc's JIT needs LLVM matching inkwell's pinned major version (22.1), which is newer than the
-# base image's distribution carries. It is therefore opt-in for image builds; `make install`
-# locally still enables it by default. To build an image with it, supply a base image that has
-# llvm-22-dev and pass --build-arg ENABLE_JIT=true.
-#
-# Dropping it means dropping the default feature set, so the build below names `jemalloc`
-# explicitly -- otherwise disabling the JIT would quietly fall back to the system allocator too.
+# revmc's JIT is not a default feature: it needs LLVM matching inkwell's pinned major version
+# (22.1), which is newer than the base image's distribution carries. To build an image with it,
+# supply a base image that has llvm-22-dev and pass --build-arg ENABLE_JIT=true.
 ARG ENABLE_JIT=false
 ENV ENABLE_JIT=$ENABLE_JIT
 ENV LLVM_SYS_221_PREFIX=/usr/lib/llvm-22
@@ -57,8 +53,8 @@ WORKDIR /app/nanoreth
 RUN --mount=type=cache,id=nanoreth-target,target=/app/nanoreth/target,sharing=locked \
     --mount=type=cache,id=cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,id=cargo-git,target=/usr/local/cargo/git,sharing=locked \
-    if [ "$ENABLE_JIT" = "true" ]; then DEFAULTS=""; else DEFAULTS="--no-default-features --features jemalloc"; fi; \
-    VERGEN_IDEMPOTENT=1 cargo chef cook --profile $BUILD_PROFILE $DEFAULTS --features "$FEATURES" --recipe-path recipe.json
+    if [ "$ENABLE_JIT" = "true" ]; then JIT="--features jit"; else JIT=""; fi; \
+    VERGEN_IDEMPOTENT=1 cargo chef cook --profile $BUILD_PROFILE $JIT --features "$FEATURES" --recipe-path recipe.json
 
 # Build application.
 COPY --exclude=dist . /app/nanoreth
@@ -75,8 +71,8 @@ WORKDIR /app/nanoreth
 RUN --mount=type=cache,id=nanoreth-target,target=/app/nanoreth/target,sharing=locked \
     --mount=type=cache,id=cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,id=cargo-git,target=/usr/local/cargo/git,sharing=locked \
-    if [ "$ENABLE_JIT" = "true" ]; then DEFAULTS=""; else DEFAULTS="--no-default-features --features jemalloc"; fi; \
-    cargo build --profile $BUILD_PROFILE $DEFAULTS --features "$FEATURES" --locked --bin reth-hl && \
+    if [ "$ENABLE_JIT" = "true" ]; then JIT="--features jit"; else JIT=""; fi; \
+    cargo build --profile $BUILD_PROFILE $JIT --features "$FEATURES" --locked --bin reth-hl && \
     cp /app/nanoreth/target/$BUILD_PROFILE/reth-hl /app/reth-hl
 
 # Use Ubuntu as the release image

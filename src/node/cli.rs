@@ -52,8 +52,9 @@ pub struct HlNodeArgs {
 
     /// Enable JIT compilation of hot EVM bytecode (revmc).
     ///
-    /// Enabled by default. Pass `--hl.jit false` to execute everything on the interpreter.
-    /// Has no effect unless the binary was built with the `jit` feature.
+    /// Off by default; pass `--hl.jit true` to enable it. Both gates must be open: the binary
+    /// has to be built with the `jit` feature, which is itself not a default, and the flag has
+    /// to be set. A build without the feature ignores this flag entirely.
     ///
     /// Mainnet blocks below the `BLOCKHASH` patch height always run on the interpreter, since
     /// JIT-compiled code does not consult the patched instruction table.
@@ -61,7 +62,7 @@ pub struct HlNodeArgs {
         id = "hl.jit",
         long = "hl.jit",
         env = "HL_JIT",
-        default_value_t = true,
+        default_value_t = false,
         action = clap::ArgAction::Set
     )]
     pub jit: bool,

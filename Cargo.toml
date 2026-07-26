@@ -134,11 +134,11 @@ tikv-jemallocator = { version = "0.6", optional = true }
 libc = "0.2"
 
 [features]
-default = ["jemalloc", "jit"]
+default = ["jemalloc"]
 jemalloc = ["dep:tikv-jemallocator"]
 
-# revmc JIT compilation of hot EVM bytecode. Enabled by default; disable at runtime with
-# `--hl.jit false`. Requires LLVM to build.
+# revmc JIT compilation of hot EVM bytecode. Not a default feature: it requires LLVM 22 to
+# build. Enable it here and then start the node with `--hl.jit true`; both gates must be open.
 # revmc comes in through reth rather than directly: it re-exports the JIT types HL needs, and a
 # direct dependency would have to spell the revmc git source exactly as reth does. Turning the
 # feature off drops revmc (and its LLVM build requirement) from the graph entirely.
