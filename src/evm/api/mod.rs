@@ -141,25 +141,10 @@ where
     type Precompiles = P;
     type Frame = EthFrame<EthInterpreter>;
 
-    fn ctx(&mut self) -> &mut Self::Context {
-        &mut self.0.ctx
-    }
 
-    fn ctx_ref(&self) -> &Self::Context {
-        &self.0.ctx
-    }
 
-    fn ctx_instructions(&mut self) -> (&mut Self::Context, &mut Self::Instructions) {
-        (&mut self.0.ctx, &mut self.0.instruction)
-    }
 
-    fn ctx_precompiles(&mut self) -> (&mut Self::Context, &mut Self::Precompiles) {
-        (&mut self.0.ctx, &mut self.0.precompiles)
-    }
 
-    fn frame_stack(&mut self) -> &mut FrameStack<Self::Frame> {
-        &mut self.0.frame_stack
-    }
 
     fn all(
         &self,

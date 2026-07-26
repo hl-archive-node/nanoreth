@@ -23,7 +23,7 @@ use reth_ethereum_primitives::EthereumReceipt;
 use reth::tasks::Runtime;
 use reth_provider::{
     DatabaseProvider, ProviderFactory, ReceiptProvider, StaticFileProviderFactory,
-    StaticFileSegment, StaticFileWriter,
+    StaticFileSegment, StaticFileWriter, to_range,
     providers::{NodeTypesForProvider, RocksDBProvider, StaticFileProvider},
     static_file::SegmentRangeInclusive,
 };
@@ -408,22 +408,6 @@ fn old_headers_range(
         .collect())
 }
 
-// Copied from reth
-fn to_range<R: std::ops::RangeBounds<u64>>(bounds: R) -> std::ops::Range<u64> {
-    let start = match bounds.start_bound() {
-        std::ops::Bound::Included(&v) => v,
-        std::ops::Bound::Excluded(&v) => v + 1,
-        std::ops::Bound::Unbounded => 0,
-    };
-
-    let end = match bounds.end_bound() {
-        std::ops::Bound::Included(&v) => v + 1,
-        std::ops::Bound::Excluded(&v) => v,
-        std::ops::Bound::Unbounded => u64::MAX,
-    };
-
-    start..end
-}
 
 fn using_old_header(number: u64, header: &[u8]) -> bool {
     let deserialized_old = is_old_header(header);
