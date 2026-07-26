@@ -21,7 +21,7 @@ use alloy_rpc_types::{
 use jsonrpsee::{PendingSubscriptionSink, proc_macros::rpc};
 use jsonrpsee_core::{RpcResult, async_trait};
 use jsonrpsee_types::{ErrorObject, error::INTERNAL_ERROR_CODE};
-use reth::{api::FullNodeComponents, builder::rpc::RpcContext, tasks::TaskSpawner};
+use reth::{api::FullNodeComponents, builder::rpc::RpcContext, tasks::TaskExecutor};
 use reth_primitives_traits::SignedTransaction;
 use reth_provider::{BlockIdReader, BlockReader, BlockReaderIdExt, ReceiptProvider};
 use reth_rpc::{EthFilter, EthPubSub};
@@ -93,6 +93,7 @@ impl<Eth: EthWrapper> HlSystemTransactionExt<Eth> {
             let block_hash = block.hash();
             let block_number = block.number();
             let base_fee_per_gas = block.base_fee_per_gas();
+            let block_timestamp = block.timestamp();
             let system_txs = block
                 .transactions_with_sender()
                 .enumerate()
@@ -102,11 +103,12 @@ impl<Eth: EthWrapper> HlSystemTransactionExt<Eth> {
                             hash: Some(*tx.tx_hash()),
                             block_hash: Some(block_hash),
                             block_number: Some(block_number),
+                            block_timestamp: Some(block_timestamp),
                             base_fee: base_fee_per_gas,
                             index: Some(index as u64),
                         };
                         self.eth_api
-                            .tx_resp_builder()
+                            .converter()
                             .fill(tx.clone().with_signer(*signer), tx_info)
                             .ok()
                     } else {
@@ -170,7 +172,15 @@ impl<Eth: EthWrapper> HlSystemTransactionExt<Eth> {
                 inputs.push(input);
             }
 
-            let receipts = self.eth_api.tx_resp_builder().convert_receipts(inputs)?;
+            let receipts = match self.eth_api.converter().convert_receipts(inputs) {
+                Ok(receipts) => receipts,
+                Err(err) => {
+                    let err = <<Eth as EthApiTypes>::Error as From<
+                        <<Eth as EthApiTypes>::RpcConvert as RpcConvert>::Error,
+                    >>::from(err);
+                    return Err(err.into());
+                }
+            };
             Ok(Some(receipts))
         } else {
             Ok(None)
@@ -342,7 +352,7 @@ impl<Eth: EthWrapper> EthLogFilterApiServer<RpcTransaction<Eth::NetworkTypes>>
 pub struct HlNodeFilterWs<Eth: EthWrapper> {
     pubsub: Arc<EthPubSub<Eth>>,
     provider: Arc<Eth::Provider>,
-    subscription_task_spawner: Box<dyn TaskSpawner + 'static>,
+    subscription_task_spawner: TaskExecutor,
     default_compliant: bool,
 }
 
@@ -350,7 +360,7 @@ impl<Eth: EthWrapper> HlNodeFilterWs<Eth> {
     pub fn new(
         pubsub: Arc<EthPubSub<Eth>>,
         provider: Arc<Eth::Provider>,
-        subscription_task_spawner: Box<dyn TaskSpawner + 'static>,
+        subscription_task_spawner: TaskExecutor,
         default_compliant: bool,
     ) -> Self {
         Self { pubsub, provider, subscription_task_spawner, default_compliant }
@@ -389,7 +399,7 @@ where
         let compliant = is_hl_compliant(ext, self.default_compliant);
         let sink = pending.accept().await?;
         let (pubsub, provider) = (self.pubsub.clone(), self.provider.clone());
-        self.subscription_task_spawner.spawn(Box::pin(async move {
+        self.subscription_task_spawner.spawn_task(async move {
             if kind == SubscriptionKind::Logs {
                 let filter = match params {
                     Some(Params::Logs(f)) => *f,
@@ -412,7 +422,7 @@ where
             } else {
                 let _ = pubsub.handle_accepted(sink, kind, params).await;
             }
-        }));
+        });
         Ok(())
     }
 }
@@ -573,10 +583,12 @@ async fn adjust_block_receipts<Eth: EthWrapper>(
             })
             .collect::<Vec<_>>();
 
-        return eth_api
-            .tx_resp_builder()
-            .convert_receipts(inputs)
-            .map(|receipts| Some((system_tx_count, receipts)));
+        return match eth_api.converter().convert_receipts(inputs) {
+            Ok(receipts) => Ok(Some((system_tx_count, receipts))),
+            Err(err) => Err(<<Eth as EthApiTypes>::Error as From<
+                <<Eth as EthApiTypes>::RpcConvert as RpcConvert>::Error,
+            >>::from(err)),
+        };
     }
 
     Ok(None)
@@ -652,8 +664,8 @@ async fn block_receipts_with_system_txs<Eth: EthWrapper>(
             regular_inputs.push(input);
         }
 
-        let receipts = eth_api.tx_resp_builder().convert_receipts(regular_inputs)?;
-        let system_tx_receipts = eth_api.tx_resp_builder().convert_receipts(system_inputs)?;
+        let receipts = eth_api.converter().convert_receipts(regular_inputs)?;
+        let system_tx_receipts = eth_api.converter().convert_receipts(system_inputs)?;
         return Ok(Some(BlockReceiptsWithSystemTx { receipts, system_tx_receipts }));
     }
 
@@ -665,7 +677,7 @@ async fn adjust_transaction_receipt<Eth: EthWrapper>(
     eth_api: &Eth,
 ) -> Result<Option<RpcReceipt<Eth::NetworkTypes>>, Eth::Error> {
     match eth_api.load_transaction_and_receipt(tx_hash).await? {
-        Some((_, meta, _)) => {
+        Some((_, meta, _, _)) => {
             // LoadReceipt::block_transaction_receipt loads the block again, so loading blocks again
             // doesn't hurt performance much
             let Some((system_tx_count, block_receipts)) =
@@ -868,7 +880,7 @@ where
         HlNodeFilterWs::new(
             Arc::new(ctx.registry.eth_handlers().pubsub.clone()),
             Arc::new(ctx.registry.eth_api().provider().clone()),
-            Box::new(ctx.node().task_executor().clone()),
+            ctx.node().task_executor().clone(),
             default_compliant,
         )
         .into_rpc(),

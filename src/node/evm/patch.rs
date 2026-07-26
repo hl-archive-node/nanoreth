@@ -1,6 +1,6 @@
 use alloy_primitives::{Address, address};
 use reth_evm::block::BlockExecutionError;
-use revm::{primitives::HashMap, state::Account};
+use revm::state::EvmState;
 
 /// Applies storage patches to the state after a transaction is executed.
 /// See https://github.com/hyperliquid-dex/hyper-evm-sync/commit/39047242b6260f7764527a2f5057dd9c3a75aa89 for more details.
@@ -29,7 +29,7 @@ pub(crate) fn patch_mainnet_after_tx(
     block_number: u64,
     tx_index: u64,
     is_system_tx: bool,
-    changes: &mut HashMap<Address, Account>,
+    changes: &mut EvmState,
 ) -> Result<(), BlockExecutionError> {
     if MAINNET_PATCHES_AFTER_TX.is_empty() {
         return Ok(());

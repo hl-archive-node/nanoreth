@@ -20,8 +20,8 @@ use reth_network::{
 };
 use reth_network_api::PeerId;
 use reth_node_ethereum::EthEngineTypes;
-use reth_payload_primitives::{BuiltPayload, EngineApiMessageVersion, PayloadTypes};
-use reth_primitives::NodePrimitives;
+use reth_payload_primitives::{BuiltPayload, PayloadTypes};
+use reth_primitives_traits::NodePrimitives;
 use reth_primitives_traits::{AlloyBlockHeader, Block};
 use reth_provider::{BlockHashReader, BlockNumReader};
 use std::{
@@ -68,7 +68,7 @@ where
 
 impl<Provider> ImportService<Provider>
 where
-    Provider: BlockNumReader + Clone + 'static,
+    Provider: BlockNumReader + Clone + Sync + 'static,
 {
     /// Create a new block import service
     pub fn new(
@@ -91,7 +91,7 @@ where
         let engine = self.engine.clone();
         Box::pin(async move {
             let sealed_block = block.block.0.block.clone().seal();
-            let payload = HlPayloadTypes::block_to_payload(sealed_block);
+            let payload = HlPayloadTypes::block_to_payload(sealed_block, None);
 
             match engine.new_payload(payload).await {
                 Ok(payload_status) => match payload_status.status {
@@ -126,7 +126,7 @@ where
                 finalized_block_hash: head_block_hash,
             };
 
-            match engine.fork_choice_updated(state, None, EngineApiMessageVersion::default()).await
+            match engine.fork_choice_updated(state, None).await
             {
                 Ok(response) => match response.payload_status.status {
                     PayloadStatusEnum::Valid => {
@@ -154,7 +154,7 @@ where
 
 impl<Provider> Future for ImportService<Provider>
 where
-    Provider: BlockNumReader + BlockHashReader + Clone + 'static + Unpin,
+    Provider: BlockNumReader + BlockHashReader + Clone + Sync + 'static + Unpin,
 {
     type Output = Result<(), Box<dyn std::error::Error>>;
 
@@ -188,7 +188,7 @@ mod tests {
     use reth_engine_primitives::{BeaconEngineMessage, OnForkChoiceUpdated};
     use reth_eth_wire::NewBlock;
     use reth_node_ethereum::EthEngineTypes;
-    use reth_primitives::Block;
+    use reth_primitives_traits::Block;
     use reth_provider::ProviderError;
     use std::{
         sync::Arc,
@@ -387,7 +387,6 @@ mod tests {
                     BeaconEngineMessage::ForkchoiceUpdated {
                         state: _,
                         payload_attrs: _,
-                        version: _,
                         tx,
                     } => {
                         tx.send(Ok(OnForkChoiceUpdated::valid(PayloadStatus::new(

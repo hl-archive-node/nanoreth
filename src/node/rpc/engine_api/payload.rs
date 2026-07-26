@@ -1,8 +1,6 @@
 use crate::node::{engine::HlBuiltPayload, rpc::engine_api::validator::HlExecutionData};
-use reth::{
-    payload::EthPayloadBuilderAttributes,
-    primitives::{NodePrimitives, SealedBlock},
-};
+use alloy_primitives::Bytes;
+use reth::primitives::{NodePrimitives, SealedBlock};
 use reth_node_ethereum::engine::EthPayloadAttributes;
 use reth_payload_primitives::{BuiltPayload, PayloadTypes};
 
@@ -14,13 +12,13 @@ pub struct HlPayloadTypes;
 impl PayloadTypes for HlPayloadTypes {
     type BuiltPayload = HlBuiltPayload;
     type PayloadAttributes = EthPayloadAttributes;
-    type PayloadBuilderAttributes = EthPayloadBuilderAttributes;
     type ExecutionData = HlExecutionData;
 
     fn block_to_payload(
         block: SealedBlock<
             <<Self::BuiltPayload as BuiltPayload>::Primitives as NodePrimitives>::Block,
         >,
+        _bal: Option<Bytes>,
     ) -> Self::ExecutionData {
         HlExecutionData(block.into_block())
     }

@@ -75,6 +75,8 @@ fn empty_block(number: u64, timestamp: u64, extra_data: &'static [u8]) -> LocalB
                         excess_blob_gas: None,
                         parent_beacon_block_root: None,
                         requests_hash: None,
+                        block_access_list_hash: None,
+                        slot_number: None,
                     },
                     hash: B256::ZERO,
                 },

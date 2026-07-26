@@ -4,6 +4,7 @@ use reth_network::{
     NetworkConfig, NetworkManager, PeersConfig,
     config::{SecretKey, rng_secret_key},
 };
+use reth::tasks::Runtime;
 use reth_provider::test_utils::NoopProvider;
 use std::{
     net::{Ipv4Addr, SocketAddr},
@@ -12,6 +13,7 @@ use std::{
 use tokio::sync::mpsc;
 
 pub struct NetworkBuilder {
+    runtime: Runtime,
     secret: SecretKey,
     peer_config: PeersConfig,
     discovery_port: u16,
@@ -20,9 +22,10 @@ pub struct NetworkBuilder {
     debug_cutoff_height: Option<u64>,
 }
 
-impl Default for NetworkBuilder {
-    fn default() -> Self {
+impl NetworkBuilder {
+    pub fn new(runtime: Runtime) -> Self {
         Self {
+            runtime,
             secret: rng_secret_key(),
             peer_config: PeersConfig::default().with_max_outbound(1).with_max_inbound(1),
             discovery_port: 0,
@@ -48,7 +51,7 @@ impl NetworkBuilder {
         self,
         block_store: Arc<BlockStore>,
     ) -> eyre::Result<(NetworkManager<HlNetworkPrimitives>, mpsc::Sender<()>)> {
-        let builder = NetworkConfig::<(), HlNetworkPrimitives>::builder(self.secret)
+        let builder = NetworkConfig::<(), HlNetworkPrimitives>::builder(self.secret, self.runtime.clone())
             .peer_config(self.peer_config)
             .discovery_addr(SocketAddr::new(Ipv4Addr::LOCALHOST.into(), self.discovery_port))
             .listener_addr(SocketAddr::new(Ipv4Addr::LOCALHOST.into(), self.listener_port))
@@ -77,8 +80,9 @@ pub async fn create_network_manager(
     chain_spec: HlChainSpec,
     block_store: Arc<BlockStore>,
     debug_cutoff_height: Option<u64>,
+    runtime: Runtime,
 ) -> eyre::Result<(NetworkManager<HlNetworkPrimitives>, mpsc::Sender<()>)> {
-    NetworkBuilder::default()
+    NetworkBuilder::new(runtime)
         .with_chain_spec(chain_spec)
         .with_debug_cutoff_height(debug_cutoff_height)
         .build(block_store)

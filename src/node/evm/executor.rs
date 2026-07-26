@@ -3,31 +3,35 @@ use crate::{
     evm::transaction::HlTxEnv,
     hardforks::HlHardforks,
     node::{
-        primitives::TransactionSigned,
+        primitives::{HlTxType, TransactionSigned},
         types::{HlExtras, ReadPrecompileInput, ReadPrecompileResult},
     },
 };
-use alloy_consensus::{Transaction, TxReceipt};
+use alloy_consensus::{Transaction, TransactionEnvelope, TxReceipt};
 use alloy_eips::{Encodable2718, eip7685::Requests};
-use alloy_evm::{block::ExecutableTx, eth::receipt_builder::ReceiptBuilderCtx};
+use alloy_evm::{
+    RecoveredTx,
+    block::{ExecutableTx, GasOutput, TxResult},
+    eth::receipt_builder::ReceiptBuilderCtx,
+};
 use alloy_primitives::{Address, Bytes, U160, U256, address, hex};
 use reth_chainspec::{EthChainSpec, EthereumHardforks, Hardforks};
 use reth_evm::{
-    Database, Evm, FromRecoveredTx, FromTxWithEncoded, IntoTxEnv, OnStateHook,
-    block::BlockValidationError,
+    Evm, FromRecoveredTx, FromTxWithEncoded, IntoTxEnv,
+    block::{BlockValidationError, StateDB},
     eth::receipt_builder::ReceiptBuilder,
     execute::{BlockExecutionError, BlockExecutor},
     precompiles::{DynPrecompile, PrecompileInput, PrecompilesMap},
 };
 use reth_provider::BlockExecutionResult;
-use reth_revm::State;
 use revm::{
-    DatabaseCommit,
+    Database, DatabaseCommit,
+    context::Block as _,
     context::{TxEnv, result::ResultAndState},
     interpreter::instructions::utility::IntoU256,
-    precompile::{PrecompileError, PrecompileOutput, PrecompileResult},
+    precompile::{PrecompileHalt, PrecompileOutput, PrecompileResult},
     primitives::HashMap,
-    state::Bytecode,
+    state::{Account, Bytecode},
 };
 
 pub fn is_system_transaction(tx: &TransactionSigned) -> bool {
@@ -35,6 +39,32 @@ pub fn is_system_transaction(tx: &TransactionSigned) -> bool {
         return false;
     };
     gas_price == 0
+}
+
+/// Per-transaction execution result produced by [`HlBlockExecutor`].
+///
+/// Carries the HL-specific bits that `commit_transaction` needs, since it no longer receives the
+/// transaction itself.
+#[derive(Debug)]
+pub struct HlTxResult<H> {
+    /// Result of the transaction execution.
+    pub result: ResultAndState<H>,
+    /// Type of the transaction.
+    pub tx_type: HlTxType,
+    /// Whether this was a HyperCore system transaction.
+    pub is_system: bool,
+}
+
+impl<H: Send + 'static> TxResult for HlTxResult<H> {
+    type HaltReason = H;
+
+    fn result(&self) -> &ResultAndState<Self::HaltReason> {
+        &self.result
+    }
+
+    fn into_result(self) -> ResultAndState<Self::HaltReason> {
+        self.result
+    }
 }
 
 pub struct HlBlockExecutor<'a, EVM, Spec, R: ReceiptBuilder>
@@ -61,30 +91,32 @@ fn run_precompile(
     precompile_calls: &HashMap<ReadPrecompileInput, ReadPrecompileResult>,
     data: &[u8],
     gas_limit: u64,
+    reservoir: u64,
 ) -> PrecompileResult {
     let input = ReadPrecompileInput { input: Bytes::copy_from_slice(data), gas_limit };
     let Some(get) = precompile_calls.get(&input) else {
-        return Err(PrecompileError::OutOfGas);
+        return Ok(PrecompileOutput::halt(PrecompileHalt::OutOfGas, reservoir));
     };
 
     match *get {
         ReadPrecompileResult::Ok { gas_used, ref bytes } => {
-            Ok(PrecompileOutput { gas_used, bytes: bytes.clone(), reverted: false })
+            Ok(PrecompileOutput::new(gas_used, bytes.clone(), reservoir))
         }
         ReadPrecompileResult::OutOfGas => {
             // Use all the gas passed to this precompile
-            Err(PrecompileError::OutOfGas)
+            Ok(PrecompileOutput::halt(PrecompileHalt::OutOfGas, reservoir))
         }
-        ReadPrecompileResult::Error => Err(PrecompileError::OutOfGas),
+        ReadPrecompileResult::Error => {
+            Ok(PrecompileOutput::halt(PrecompileHalt::OutOfGas, reservoir))
+        }
         ReadPrecompileResult::UnexpectedError => panic!("unexpected precompile error"),
     }
 }
 
-impl<'a, DB, EVM, Spec, R: ReceiptBuilder> HlBlockExecutor<'a, EVM, Spec, R>
+impl<'a, EVM, Spec, R: ReceiptBuilder> HlBlockExecutor<'a, EVM, Spec, R>
 where
-    DB: Database + 'a,
     EVM: Evm<
-            DB = &'a mut State<DB>,
+            DB: StateDB,
             Precompiles = PrecompilesMap,
             Tx: FromRecoveredTx<R::Transaction>
                     + FromRecoveredTx<TransactionSigned>
@@ -111,32 +143,36 @@ where
             "608060405234801561000f575f5ffd5b5060043610610029575f3560e01c806317938e131461002d575b5f5ffd5b61004760048036038101906100429190610123565b610049565b005b5f5f90505b61019081101561006557808060010191505061004e565b503373ffffffffffffffffffffffffffffffffffffffff167f8c7f585fb295f7eb1e6aeb8fba61b23a4fe60beda405f0045073b185c74412e383836040516100ae9291906101c8565b60405180910390a25050565b5f5ffd5b5f5ffd5b5f5ffd5b5f5ffd5b5f5ffd5b5f5f83601f8401126100e3576100e26100c2565b5b8235905067ffffffffffffffff811115610100576100ff6100c6565b5b60208301915083600182028301111561011c5761011b6100ca565b5b9250929050565b5f5f60208385031215610139576101386100ba565b5b5f83013567ffffffffffffffff811115610156576101556100be565b5b610162858286016100ce565b92509250509250929050565b5f82825260208201905092915050565b828183375f83830152505050565b5f601f19601f8301169050919050565b5f6101a7838561016e565b93506101b483858461017e565b6101bd8361018c565b840190509392505050565b5f6020820190508181035f8301526101e181848661019c565b9050939250505056fea2646970667358221220f01517e1fbaff8af4bd72cb063cccecbacbb00b07354eea7dd52265d355474fb64736f6c634300081c0033"
         );
 
-        if self.evm.block().number != U256::from(COREWRITER_ENABLED_BLOCK_NUMBER) {
+        if self.evm.block().number() != U256::from(COREWRITER_ENABLED_BLOCK_NUMBER) {
             return Ok(());
         }
 
         let corewriter_code = Bytecode::new_raw(COREWRITER_CODE.into());
-        let account = self
+        let mut info = self
             .evm
             .db_mut()
-            .load_cache_account(COREWRITER_CONTRACT_ADDRESS)
-            .map_err(BlockExecutionError::other)?;
+            .basic(COREWRITER_CONTRACT_ADDRESS)
+            .map_err(BlockExecutionError::other)?
+            .unwrap_or_default();
 
-        let mut info = account.account_info().unwrap_or_default();
         info.code_hash = corewriter_code.hash_slow();
         info.code = Some(corewriter_code);
 
-        let transition = account.change(info, Default::default());
-        self.evm.db_mut().apply_transition(vec![(COREWRITER_CONTRACT_ADDRESS, transition)]);
+        // The generic `StateDB` bound only exposes `Database`/`DatabaseCommit`, so the code is
+        // installed by committing a touched account rather than through a state transition.
+        let mut account = Account::from(info);
+        account.mark_touch();
+        self.evm
+            .db_mut()
+            .commit(HashMap::from_iter([(COREWRITER_CONTRACT_ADDRESS, account)]));
         Ok(())
     }
 }
 
-impl<'a, DB, E, Spec, R> BlockExecutor for HlBlockExecutor<'a, E, Spec, R>
+impl<E, Spec, R> BlockExecutor for HlBlockExecutor<'_, E, Spec, R>
 where
-    DB: Database + 'a,
     E: Evm<
-            DB = &'a mut State<DB>,
+            DB: StateDB,
             Tx: FromRecoveredTx<R::Transaction>
                     + FromRecoveredTx<TransactionSigned>
                     + FromTxWithEncoded<TransactionSigned>,
@@ -152,6 +188,7 @@ where
     type Transaction = TransactionSigned;
     type Receipt = R::Receipt;
     type Evm = E;
+    type Result = HlTxResult<<E as Evm>::HaltReason>;
 
     fn apply_pre_execution_changes(&mut self) -> Result<(), BlockExecutionError> {
         apply_precompiles(&mut self.evm, &self.ctx.extras);
@@ -163,10 +200,12 @@ where
     fn execute_transaction_without_commit(
         &mut self,
         tx: impl ExecutableTx<Self>,
-    ) -> Result<ResultAndState<<Self::Evm as Evm>::HaltReason>, BlockExecutionError> {
+    ) -> Result<Self::Result, BlockExecutionError> {
+        let (tx_env, tx) = tx.into_parts();
+
         // The sum of the transaction's gas limit, Tg, and the gas utilized in this block prior,
         // must be no greater than the block's gasLimit.
-        let block_available_gas = self.evm.block().gas_limit - self.gas_used;
+        let block_available_gas = self.evm.block().gas_limit() - self.gas_used;
 
         if tx.tx().gas_limit() > block_available_gas {
             return Err(BlockValidationError::TransactionGasLimitMoreThanAvailableBlockGas {
@@ -176,38 +215,43 @@ where
             .into());
         }
 
+        // HL: `commit_transaction` no longer receives the transaction, so everything the commit
+        // step needs from it is captured here.
+        let is_system = is_system_transaction(tx.tx());
+        let tx_type = tx.tx().tx_type();
+
         // Execute transaction and return the result
-        self.evm.transact(&tx).map_err(|err| {
+        let result = self.evm.transact(tx_env).map_err(|err| {
             let hash = tx.tx().trie_hash();
             BlockExecutionError::evm(err, hash)
-        })
+        })?;
+
+        Ok(HlTxResult { result, tx_type, is_system })
     }
 
-    fn commit_transaction(
-        &mut self,
-        output: ResultAndState<<Self::Evm as Evm>::HaltReason>,
-        tx: impl ExecutableTx<Self>,
-    ) -> Result<u64, BlockExecutionError> {
-        let ResultAndState { result, mut state } = output;
+    fn commit_transaction(&mut self, output: Self::Result) -> GasOutput {
+        let HlTxResult { result: ResultAndState { result, mut state }, tx_type, is_system } =
+            output;
 
-        let gas_used = result.gas_used();
+        let gas_used = result.gas().tx_gas_used();
 
         // append gas used
-        if !is_system_transaction(tx.tx()) {
+        if !is_system {
             self.gas_used += gas_used;
         }
 
         // apply patches after
         patch_mainnet_after_tx(
-            self.evm.block().number.saturating_to(),
+            self.evm.block().number().saturating_to(),
             self.receipts.len() as u64,
-            is_system_transaction(tx.tx()),
+            is_system,
             &mut state,
-        )?;
+        )
+        .expect("failed to apply mainnet patch");
 
         // Push transaction changeset and calculate header bloom filter for receipt.
         self.receipts.push(self.receipt_builder.build_receipt(ReceiptBuilderCtx {
-            tx: tx.tx(),
+            tx_type,
             evm: &self.evm,
             result,
             state: &state,
@@ -217,7 +261,7 @@ where
         // Commit the state changes.
         self.evm.db_mut().commit(state);
 
-        Ok(gas_used)
+        GasOutput::new(gas_used)
     }
 
     fn finish(self) -> Result<(Self::Evm, BlockExecutionResult<R::Receipt>), BlockExecutionError> {
@@ -227,11 +271,14 @@ where
                 receipts: self.receipts,
                 requests: Requests::default(),
                 gas_used: self.gas_used,
+                blob_gas_used: 0,
             },
         ))
     }
 
-    fn set_state_hook(&mut self, _hook: Option<Box<dyn OnStateHook>>) {}
+    fn receipts(&self) -> &[Self::Receipt] {
+        &self.receipts
+    }
 
     fn evm_mut(&mut self) -> &mut Self::Evm {
         &mut self.evm
@@ -246,7 +293,7 @@ pub fn apply_precompiles<EVM>(evm: &mut EVM, extras: &HlExtras)
 where
     EVM: Evm<Precompiles = PrecompilesMap>,
 {
-    let block_number = evm.block().number;
+    let block_number = evm.block().number();
     let precompiles_mut = evm.precompiles_mut();
     // For all precompile addresses just in case it's populated and not cleared
     // Clear 0x00...08xx addresses
@@ -262,7 +309,7 @@ where
             let precompiles_map: HashMap<ReadPrecompileInput, ReadPrecompileResult> =
                 precompile.iter().map(|(input, result)| (input.clone(), result.clone())).collect();
             Some(DynPrecompile::from(move |input: PrecompileInput| -> PrecompileResult {
-                run_precompile(&precompiles_map, input.data, input.gas)
+                run_precompile(&precompiles_map, input.data, input.gas, input.reservoir)
             }))
         });
     }
@@ -288,8 +335,8 @@ fn fill_all_precompiles(extras: &HlExtras, precompiles_mut: &mut PrecompilesMap)
                 return Some(precompile);
             }
 
-            Some(DynPrecompile::from(move |_: PrecompileInput| -> PrecompileResult {
-                Err(PrecompileError::OutOfGas)
+            Some(DynPrecompile::from(move |input: PrecompileInput| -> PrecompileResult {
+                Ok(PrecompileOutput::halt(PrecompileHalt::OutOfGas, input.reservoir))
             }))
         });
     }

@@ -16,14 +16,14 @@ use reth::{
         rpc::{EthApiBuilder, EthApiCtx},
     },
     rpc::{
-        eth::{DevSigner, FullEthApiServer, core::EthApiInner},
+        eth::{FullEthApiServer, core::EthApiInner},
         server_types::eth::{
             EthApiError, EthStateCache, FeeHistoryCache, GasPriceOracle,
             receipt::EthReceiptConverter,
         },
     },
     tasks::{
-        TaskSpawner,
+        Runtime,
         pool::{BlockingTaskGuard, BlockingTaskPool},
     },
 };
@@ -31,24 +31,24 @@ use reth_evm::{
     ConfigureEvm, Database, EvmEnvFor, EvmFor, HaltReasonFor, InspectorFor, TxEnvFor,
     tracing::{TracingCtx, TxTracer},
 };
-use reth_primitives::NodePrimitives;
+use reth_primitives_traits::NodePrimitives;
 use reth_primitives_traits::{BlockBody, Recovered, RecoveredBlock};
 use reth_provider::{
     BlockReaderIdExt, ChainSpecProvider, ProviderError, ProviderHeader, ProviderTx,
 };
-use reth_revm::{database::StateProviderDatabase, db::CacheDB};
+use reth_revm::db::bal::EvmDatabaseError;
 use reth_rpc::RpcTypes;
 use reth_rpc_eth_api::{
     EthApiTypes, FromEvmError, RpcConvert, RpcConverter, RpcNodeCore, RpcNodeCoreExt,
-    SignableTxRequest,
     helpers::{
-        AddDevSigners, EthApiSpec, EthFees, EthState, LoadBlock, LoadFee, LoadPendingBlock,
-        LoadState, SpawnBlocking, Trace, pending_block::BuildPendingEnv, spec::SignersForApi,
+        Call, EthApiSpec, EthFees, EthState, EthSubscriptions, GetBlockAccessList, LoadBlock,
+        LoadFee, LoadPendingBlock, LoadState, SpawnBlocking, Trace, pending_block::BuildPendingEnv,
     },
 };
-use reth_rpc_eth_types::cache::db::{StateCacheDbRefMutWrapper, StateProviderTraitObjWrapper};
+use reth_rpc_eth_types::cache::db::StateCacheDb;
 use reth_storage_api::ProviderBlock;
-use revm::{DatabaseCommit, context::result::ResultAndState};
+use revm::{context::Block as _, context::result::ResultAndState};
+use tokio::sync::Semaphore;
 use std::{fmt, marker::PhantomData, sync::Arc};
 
 mod block;
@@ -93,21 +93,21 @@ where
 impl<N, Rpc> EthApiTypes for HlEthApi<N, Rpc>
 where
     N: HlRpcNodeCore,
-    Rpc: RpcConvert<Primitives = N::Primitives>,
+    Rpc: RpcConvert<Primitives = N::Primitives, Error = EthApiError>,
 {
     type Error = EthApiError;
     type NetworkTypes = Rpc::Network;
     type RpcConvert = Rpc;
 
-    fn tx_resp_builder(&self) -> &Self::RpcConvert {
-        self.inner.eth_api.tx_resp_builder()
+    fn converter(&self) -> &Self::RpcConvert {
+        self.inner.eth_api.converter()
     }
 }
 
 impl<N, Rpc> RpcNodeCore for HlEthApi<N, Rpc>
 where
     N: HlRpcNodeCore,
-    Rpc: RpcConvert<Primitives = N::Primitives>,
+    Rpc: RpcConvert<Primitives = N::Primitives, Error = EthApiError>,
 {
     type Primitives = N::Primitives;
     type Provider = N::Provider;
@@ -152,27 +152,19 @@ where
     N: HlRpcNodeCore,
     Rpc: RpcConvert<Primitives = N::Primitives, Error = EthApiError>,
 {
-    type Transaction = ProviderTx<Self::Provider>;
-    type Rpc = Rpc::Network;
-
     #[inline]
     fn starting_block(&self) -> U256 {
         self.inner.eth_api.starting_block()
-    }
-
-    #[inline]
-    fn signers(&self) -> &SignersForApi<Self> {
-        self.inner.eth_api.signers()
     }
 }
 
 impl<N, Rpc> SpawnBlocking for HlEthApi<N, Rpc>
 where
     N: HlRpcNodeCore,
-    Rpc: RpcConvert<Primitives = N::Primitives>,
+    Rpc: RpcConvert<Primitives = N::Primitives, Error = EthApiError>,
 {
     #[inline]
-    fn io_task_spawner(&self) -> impl TaskSpawner {
+    fn io_task_spawner(&self) -> &Runtime {
         self.inner.eth_api.task_spawner()
     }
 
@@ -184,6 +176,11 @@ where
     #[inline]
     fn tracing_task_guard(&self) -> &BlockingTaskGuard {
         self.inner.eth_api.blocking_task_guard()
+    }
+
+    #[inline]
+    fn blocking_io_task_guard(&self) -> &Arc<Semaphore> {
+        self.inner.eth_api.blocking_io_request_semaphore()
     }
 }
 
@@ -232,11 +229,27 @@ where
 {
 }
 
+impl<N, Rpc> EthSubscriptions for HlEthApi<N, Rpc>
+where
+    N: HlRpcNodeCore,
+    Rpc: RpcConvert<Primitives = N::Primitives, Error = EthApiError>,
+{
+}
+
+impl<N, Rpc> GetBlockAccessList for HlEthApi<N, Rpc>
+where
+    N: HlRpcNodeCore,
+    EthApiError: FromEvmError<N::Evm>,
+    Rpc: RpcConvert<Primitives = N::Primitives, Error = EthApiError, Evm = N::Evm>,
+{
+}
+
 impl<N, Rpc> Trace for HlEthApi<N, Rpc>
 where
     N: HlRpcNodeCore,
     EthApiError: FromEvmError<N::Evm>,
-    Rpc: RpcConvert<Primitives = N::Primitives, Error = EthApiError>,
+    Rpc: RpcConvert<Primitives = N::Primitives, Error = EthApiError, Evm = N::Evm>,
+    Self: Call,
 {
     fn inspect<DB, I>(
         &self,
@@ -246,24 +259,21 @@ where
         inspector: I,
     ) -> Result<ResultAndState<HaltReasonFor<Self::Evm>>, Self::Error>
     where
-        DB: Database<Error = ProviderError>,
+        DB: Database<Error = EvmDatabaseError<ProviderError>>,
         I: InspectorFor<Self::Evm, DB>,
     {
-        let block_number = evm_env.block_env().number;
-        let hl_extras = self.get_hl_extras(block_number.to::<u64>().into())?;
+        let block_number: u64 = evm_env.block_env.number().saturating_to();
+        let hl_extras = self.get_hl_extras(block_number.into())?;
 
         let mut evm = self.evm_config().evm_with_env_and_inspector(db, evm_env, inspector);
         apply_precompiles(&mut evm, &hl_extras);
         evm.transact(tx_env).map_err(Self::Error::from_evm_err)
     }
 
-    fn apply_pre_execution_changes<DB: Send + Database + DatabaseCommit>(
+    fn apply_pre_execution_changes(
         &self,
-        _block: &reth_primitives_traits::RecoveredBlock<
-            reth_storage_api::ProviderBlock<Self::Provider>,
-        >,
-        _db: &mut DB,
-        _evm_env: &EvmEnvFor<Self::Evm>,
+        _block: &RecoveredBlock<ProviderBlock<Self::Provider>>,
+        _db: &mut StateCacheDb,
     ) -> Result<(), Self::Error> {
         // HL dynamic precompiles are EVM-local, so they must be installed on the actual
         // execution EVM rather than through this DB/env-only hook.
@@ -285,43 +295,32 @@ where
                 TracingCtx<
                     '_,
                     Recovered<&ProviderTx<Self::Provider>>,
-                    EvmFor<Self::Evm, StateCacheDbRefMutWrapper<'_, '_>, Insp>,
+                    EvmFor<Self::Evm, &mut StateCacheDb, Insp>,
                 >,
             ) -> Result<R, Self::Error>
             + Send
             + 'static,
         Setup: FnMut() -> Insp + Send + 'static,
-        Insp: Clone + for<'a, 'b> InspectorFor<Self::Evm, StateCacheDbRefMutWrapper<'a, 'b>>,
+        Insp: Clone + for<'a> InspectorFor<Self::Evm, &'a mut StateCacheDb>,
         R: Send + 'static,
     {
-        let block = async {
-            if block.is_some() {
-                return Ok(block);
-            }
-            self.recovered_block(block_id).await
-        };
-
-        let ((evm_env, _), block) = futures::try_join!(self.evm_env_at(block_id), block)?;
+        let block = if block.is_some() { block } else { self.recovered_block(block_id).await? };
 
         let Some(block) = block else { return Ok(None) };
+        let evm_env = self.evm_env_for_header(block.sealed_block().sealed_header())?;
 
         if block.body().transactions().is_empty() {
             return Ok(Some(Vec::new()));
         }
 
-        self.spawn_blocking_io_fut(move |this| async move {
-            let state_at = block.parent_hash();
+        self.spawn_with_state_at_block(block.parent_hash(), move |this, mut db| {
             let block_hash = block.hash();
-            let block_number = evm_env.block_env.number.saturating_to();
-            let base_fee = evm_env.block_env.basefee;
-            let hl_extras =
-                this.get_hl_extras(evm_env.block_env.number.to::<u64>().into()).map_err(
-                    |err: ProviderError| <EthApiError as From<ProviderError>>::from(err),
-                )?;
-
-            let state = this.state_at_block_id(state_at.into()).await?;
-            let mut db =
-                CacheDB::new(StateProviderDatabase::new(StateProviderTraitObjWrapper(&state)));
+            let block_number: u64 = evm_env.block_env.number().saturating_to();
+            let block_timestamp = evm_env.block_env.timestamp().saturating_to();
+            let base_fee = evm_env.block_env.basefee();
+            let hl_extras = this.get_hl_extras(block_number.into()).map_err(
+                |err: ProviderError| <EthApiError as From<ProviderError>>::from(err),
+            )?;
 
             let max_transactions = highest_index.map_or_else(
                 || block.body().transaction_count(),
@@ -330,7 +329,7 @@ where
 
             let mut idx = 0;
             let mut evm = this.evm_config().evm_factory().create_evm_with_inspector(
-                StateCacheDbRefMutWrapper(&mut db),
+                &mut db,
                 evm_env,
                 inspector_setup(),
             );
@@ -344,6 +343,7 @@ where
                         index: Some(idx),
                         block_hash: Some(block_hash),
                         block_number: Some(block_number),
+                        block_timestamp: Some(block_timestamp),
                         base_fee: Some(base_fee),
                     };
                     idx += 1;
@@ -375,18 +375,6 @@ where
     }
 }
 
-impl<N, Rpc> AddDevSigners for HlEthApi<N, Rpc>
-where
-    N: HlRpcNodeCore,
-    Rpc: RpcConvert<
-        Network: RpcTypes<TransactionRequest: SignableTxRequest<ProviderTx<N::Provider>>>,
-    >,
-{
-    fn with_dev_accounts(&self) {
-        *self.inner.eth_api.signers().write() = DevSigner::random_signers(20)
-    }
-}
-
 /// Builds [`HlEthApi`] for HL.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -413,7 +401,7 @@ where
     HlEthApi<N, HlRpcConvert<N, NetworkT>>: FullEthApiServer<
             Provider = <N as FullNodeTypes>::Provider,
             Pool = <N as FullNodeComponents>::Pool,
-        > + AddDevSigners,
+        >,
 {
     type EthApi = HlEthApi<N, HlRpcConvert<N, NetworkT>>;
 

@@ -10,6 +10,7 @@ use revm::{
     },
     inspector::{InspectorEvmTr, JournalExt},
     interpreter::{Instruction, InterpreterResult, interpreter::EthInterpreter},
+    primitives::hardfork::SpecId,
 };
 
 use crate::chainspec::MAINNET_CHAIN_ID;
@@ -30,15 +31,18 @@ impl<CTX: ContextTr, INSP>
     HlEvmInner<CTX, INSP, EthInstructions<EthInterpreter, CTX>, EthPrecompiles>
 {
     pub fn new(ctx: CTX, inspector: INSP) -> Self {
-        let mut instruction = EthInstructions::new_mainnet();
+        // HL's only spec maps to Cancun; see `HlSpecId::into_eth_spec`.
+        let mut instruction = EthInstructions::new_mainnet_with_spec(SpecId::CANCUN);
 
         const NON_PLACEHOLDER_BLOCK_HASH_HEIGHT: u64 = 243_538;
         if ctx.chain_id() == MAINNET_CHAIN_ID &&
             ctx.block_number() < NON_PLACEHOLDER_BLOCK_HASH_HEIGHT
         {
+            // BLOCKHASH costs 20 gas.
             instruction.insert_instruction(
                 BLOCKHASH,
-                Instruction::new(patch::blockhash_returning_placeholder, 20),
+                Instruction::new(patch::blockhash_returning_placeholder),
+                20,
             );
         }
 
@@ -46,7 +50,7 @@ impl<CTX: ContextTr, INSP>
             ctx,
             inspector,
             instruction,
-            precompiles: EthPrecompiles::default(),
+            precompiles: EthPrecompiles::new(SpecId::CANCUN),
             frame_stack: FrameStack::new(),
         })
     }
@@ -88,6 +92,42 @@ where
     ) -> (&mut Self::Context, &mut Self::Inspector, &mut Self::Frame, &mut Self::Instructions) {
         (&mut self.0.ctx, &mut self.0.inspector, self.0.frame_stack.get(), &mut self.0.instruction)
     }
+
+    fn all_inspector(
+        &self,
+    ) -> (
+        &Self::Context,
+        &Self::Instructions,
+        &Self::Precompiles,
+        &FrameStack<Self::Frame>,
+        &Self::Inspector,
+    ) {
+        (
+            &self.0.ctx,
+            &self.0.instruction,
+            &self.0.precompiles,
+            &self.0.frame_stack,
+            &self.0.inspector,
+        )
+    }
+
+    fn all_mut_inspector(
+        &mut self,
+    ) -> (
+        &mut Self::Context,
+        &mut Self::Instructions,
+        &mut Self::Precompiles,
+        &mut FrameStack<Self::Frame>,
+        &mut Self::Inspector,
+    ) {
+        (
+            &mut self.0.ctx,
+            &mut self.0.instruction,
+            &mut self.0.precompiles,
+            &mut self.0.frame_stack,
+            &mut self.0.inspector,
+        )
+    }
 }
 
 impl<CTX, INSP, I, P> EvmTr for HlEvmInner<CTX, INSP, I, P>
@@ -119,6 +159,33 @@ where
 
     fn frame_stack(&mut self) -> &mut FrameStack<Self::Frame> {
         &mut self.0.frame_stack
+    }
+
+    fn all(
+        &self,
+    ) -> (
+        &Self::Context,
+        &Self::Instructions,
+        &Self::Precompiles,
+        &FrameStack<Self::Frame>,
+    ) {
+        (&self.0.ctx, &self.0.instruction, &self.0.precompiles, &self.0.frame_stack)
+    }
+
+    fn all_mut(
+        &mut self,
+    ) -> (
+        &mut Self::Context,
+        &mut Self::Instructions,
+        &mut Self::Precompiles,
+        &mut FrameStack<Self::Frame>,
+    ) {
+        (
+            &mut self.0.ctx,
+            &mut self.0.instruction,
+            &mut self.0.precompiles,
+            &mut self.0.frame_stack,
+        )
     }
 
     fn frame_init(

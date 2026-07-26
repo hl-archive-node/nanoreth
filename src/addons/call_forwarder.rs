@@ -121,7 +121,7 @@ where
                 &self.eth_api,
                 request,
                 block_id.unwrap_or_default(),
-                state_override,
+                EvmOverrides::state(state_override),
             )
             .await
             .map_err(|e| {

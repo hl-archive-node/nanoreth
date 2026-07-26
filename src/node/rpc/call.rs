@@ -6,14 +6,15 @@ use alloy_consensus::transaction::TxHashRef;
 use alloy_evm::Evm;
 use alloy_primitives::B256;
 use reth::rpc::server_types::eth::EthApiError;
-use reth_evm::{ConfigureEvm, Database, EvmEnvFor, HaltReasonFor, InspectorFor, SpecFor, TxEnvFor};
-use reth_primitives::{NodePrimitives, Recovered};
+use reth_evm::{ConfigureEvm, Database, EvmEnvFor, HaltReasonFor, InspectorFor, TxEnvFor};
+use reth_primitives_traits::{NodePrimitives, Recovered};
 use reth_provider::{ProviderError, ProviderTx};
 use reth_rpc_eth_api::{
     FromEvmError, RpcConvert, RpcNodeCore,
     helpers::{Call, EthCall},
 };
-use revm::{DatabaseCommit, context::result::ResultAndState};
+use reth_revm::db::bal::EvmDatabaseError;
+use revm::{DatabaseCommit, context::Block as _, context::result::ResultAndState};
 
 impl<N> HlRpcNodeCore for N where N: RpcNodeCore<Primitives: NodePrimitives<Block = HlBlock>> {}
 
@@ -21,12 +22,7 @@ impl<N, Rpc> EthCall for HlEthApi<N, Rpc>
 where
     N: HlRpcNodeCore,
     EthApiError: FromEvmError<N::Evm>,
-    Rpc: RpcConvert<
-            Primitives = N::Primitives,
-            Error = EthApiError,
-            TxEnv = TxEnvFor<N::Evm>,
-            Spec = SpecFor<N::Evm>,
-        >,
+    Rpc: RpcConvert<Primitives = N::Primitives, Error = EthApiError, Evm = N::Evm>,
 {
 }
 
@@ -34,12 +30,7 @@ impl<N, Rpc> Call for HlEthApi<N, Rpc>
 where
     N: HlRpcNodeCore,
     EthApiError: FromEvmError<N::Evm>,
-    Rpc: RpcConvert<
-            Primitives = N::Primitives,
-            Error = EthApiError,
-            TxEnv = TxEnvFor<N::Evm>,
-            Spec = SpecFor<N::Evm>,
-        >,
+    Rpc: RpcConvert<Primitives = N::Primitives, Error = EthApiError, Evm = N::Evm>,
 {
     #[inline]
     fn call_gas_limit(&self) -> u64 {
@@ -51,6 +42,16 @@ where
         self.inner.eth_api.max_simulate_blocks()
     }
 
+    #[inline]
+    fn compute_state_root_for_eth_simulate(&self) -> bool {
+        self.inner.eth_api.compute_state_root_for_eth_simulate()
+    }
+
+    #[inline]
+    fn evm_memory_limit(&self) -> u64 {
+        self.inner.eth_api.evm_memory_limit()
+    }
+
     fn transact<DB>(
         &self,
         db: DB,
@@ -58,10 +59,10 @@ where
         tx_env: TxEnvFor<Self::Evm>,
     ) -> Result<ResultAndState<HaltReasonFor<Self::Evm>>, Self::Error>
     where
-        DB: Database<Error = ProviderError> + fmt::Debug,
+        DB: Database<Error = EvmDatabaseError<ProviderError>> + fmt::Debug,
     {
-        let block_number = evm_env.block_env().number;
-        let hl_extras = self.get_hl_extras(block_number.to::<u64>().into())?;
+        let block_number: u64 = evm_env.block_env.number().saturating_to();
+        let hl_extras = self.get_hl_extras(block_number.into())?;
 
         let mut evm = self.evm_config().evm_with_env(db, evm_env);
         apply_precompiles(&mut evm, &hl_extras);
@@ -78,11 +79,11 @@ where
         inspector: I,
     ) -> Result<ResultAndState<HaltReasonFor<Self::Evm>>, Self::Error>
     where
-        DB: Database<Error = ProviderError> + fmt::Debug,
+        DB: Database<Error = EvmDatabaseError<ProviderError>> + fmt::Debug,
         I: InspectorFor<Self::Evm, DB>,
     {
-        let block_number = evm_env.block_env().number;
-        let hl_extras = self.get_hl_extras(block_number.to::<u64>().into())?;
+        let block_number: u64 = evm_env.block_env.number().saturating_to();
+        let hl_extras = self.get_hl_extras(block_number.into())?;
 
         let mut evm = self.evm_config().evm_with_env_and_inspector(db, evm_env, inspector);
         apply_precompiles(&mut evm, &hl_extras);
@@ -99,11 +100,11 @@ where
         target_tx_hash: B256,
     ) -> Result<usize, Self::Error>
     where
-        DB: Database<Error = ProviderError> + DatabaseCommit + core::fmt::Debug,
+        DB: Database<Error = EvmDatabaseError<ProviderError>> + DatabaseCommit + core::fmt::Debug,
         I: IntoIterator<Item = Recovered<&'a ProviderTx<Self::Provider>>>,
     {
-        let block_number = evm_env.block_env().number;
-        let hl_extras = self.get_hl_extras(block_number.to::<u64>().into())?;
+        let block_number: u64 = evm_env.block_env.number().saturating_to();
+        let hl_extras = self.get_hl_extras(block_number.into())?;
 
         let mut evm = self.evm_config().evm_with_env(db, evm_env);
         apply_precompiles(&mut evm, &hl_extras);

@@ -17,21 +17,23 @@ use reth::{
     api::FullNodeTypes, builder::components::PoolBuilder, transaction_pool::PoolTransaction,
 };
 use reth_ethereum_primitives::PooledTransactionVariant;
-use reth_primitives::Recovered;
+use reth_primitives_traits::Recovered;
 use reth_primitives_traits::InMemorySize;
 use reth_transaction_pool::{EthPoolTransaction, noop::NoopTransactionPool};
 use std::sync::Arc;
 
 pub struct HlPoolBuilder;
-impl<Node> PoolBuilder<Node> for HlPoolBuilder
+impl<Node, Evm> PoolBuilder<Node, Evm> for HlPoolBuilder
 where
     Node: FullNodeTypes<Types = HlNode>,
+    Evm: Send,
 {
     type Pool = NoopTransactionPool<HlPooledTransaction>;
 
     async fn build_pool(
         self,
         _ctx: &reth::builder::BuilderContext<Node>,
+        _evm_config: Evm,
     ) -> eyre::Result<Self::Pool> {
         Ok(NoopTransactionPool::new())
     }
@@ -112,6 +114,10 @@ impl PoolTransaction for HlPooledTransaction {
     type Pooled = PooledTransactionVariant;
 
     fn into_consensus(self) -> Recovered<Self::Consensus> {
+        unreachable!()
+    }
+
+    fn consensus_ref(&self) -> Recovered<&Self::Consensus> {
         unreachable!()
     }
 

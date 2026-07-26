@@ -6,7 +6,7 @@ use alloy_eips::eip7685::Requests;
 use alloy_primitives::{B256, Bloom};
 use reth::consensus::ConsensusError;
 use reth_chainspec::EthereumHardforks;
-use reth_primitives::{GotExpected, RecoveredBlock, gas_spent_by_transactions};
+use reth_primitives_traits::{GotExpected, RecoveredBlock, receipt::gas_spent_by_transactions};
 use reth_primitives_traits::Receipt as ReceiptTrait;
 
 pub fn validate_block_post_execution<R, ChainSpec>(

@@ -7,13 +7,15 @@ use reth::{
     api::{FullNodeTypes, NodeTypes},
     beacon_consensus::EthBeaconConsensus,
     builder::{BuilderContext, components::ConsensusBuilder},
-    consensus::{Consensus, ConsensusError, FullConsensus, HeaderValidator},
+    consensus::{Consensus, ConsensusError, FullConsensus, HeaderValidator, ReceiptRootBloom},
     consensus_common::validation::{
         validate_against_parent_4844, validate_against_parent_hash_number,
     },
 };
+use alloy_primitives::B256;
 use reth_chainspec::EthChainSpec;
-use reth_primitives::{Receipt, RecoveredBlock, SealedBlock, SealedHeader};
+use reth_ethereum_primitives::Receipt;
+use reth_primitives_traits::{RecoveredBlock, SealedBlock, SealedHeader};
 use reth_primitives_traits::BlockHeader;
 use reth_provider::BlockExecutionResult;
 use std::sync::Arc;
@@ -106,8 +108,6 @@ impl<ChainSpec> Consensus<HlBlock> for HlConsensus<ChainSpec>
 where
     ChainSpec: EthChainSpec<Header = HlHeader> + HlHardforks,
 {
-    type Error = ConsensusError;
-
     fn validate_body_against_header(
         &self,
         body: &HlBlockBody,
@@ -157,6 +157,8 @@ where
         &self,
         block: &RecoveredBlock<HlBlock>,
         result: &BlockExecutionResult<Receipt>,
+        _receipt_root_bloom: Option<ReceiptRootBloom>,
+        _block_access_list_hash: Option<B256>,
     ) -> Result<(), ConsensusError> {
         reth_copy::validate_block_post_execution(
             block,

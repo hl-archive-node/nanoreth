@@ -6,13 +6,13 @@ use alloy_rpc_types::Header;
 use futures::StreamExt;
 use jsonrpsee::{SubscriptionMessage, SubscriptionSink};
 use jsonrpsee_types::ErrorObject;
-use reth_primitives::SealedHeader;
+use reth_primitives_traits::{SealedHeader, TxTy};
 use reth_provider::{BlockReader, CanonStateSubscriptions};
 use reth_rpc::{RpcTypes, eth::pubsub::SubscriptionSerializeError};
 use reth_rpc_convert::{RpcBlock, RpcHeader, RpcReceipt, RpcTransaction, RpcTxReq};
 use reth_rpc_eth_api::{
     EthApiServer, FullEthApiTypes, RpcNodeCoreExt,
-    helpers::{EthBlocks, EthTransactions, LoadReceipt},
+    helpers::{EthBlocks, EthSubscriptions, EthTransactions, LoadReceipt},
 };
 use serde::Serialize;
 use tokio_stream::Stream;
@@ -24,12 +24,14 @@ pub trait EthWrapper:
         RpcBlock<Self::NetworkTypes>,
         RpcReceipt<Self::NetworkTypes>,
         RpcHeader<Self::NetworkTypes>,
+        TxTy<Self::Primitives>,
     > + FullEthApiTypes<
         Primitives = HlPrimitives,
         NetworkTypes: RpcTypes<TransactionResponse = alloy_rpc_types_eth::Transaction>,
     > + RpcNodeCoreExt<Provider: BlockReader<Block = HlBlock>>
     + EthBlocks
     + EthTransactions
+    + EthSubscriptions
     + LoadReceipt
     + 'static
 {
@@ -42,12 +44,14 @@ impl<T> EthWrapper for T where
             RpcBlock<Self::NetworkTypes>,
             RpcReceipt<Self::NetworkTypes>,
             RpcHeader<Self::NetworkTypes>,
+            TxTy<Self::Primitives>,
         > + FullEthApiTypes<
             Primitives = HlPrimitives,
             NetworkTypes: RpcTypes<TransactionResponse = alloy_rpc_types_eth::Transaction>,
         > + RpcNodeCoreExt<Provider: BlockReader<Block = HlBlock>>
         + EthBlocks
         + EthTransactions
+        + EthSubscriptions
         + LoadReceipt
         + 'static
 {

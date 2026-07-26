@@ -248,6 +248,8 @@ docker-build-push-nightly: ## Build and push cross-arch Docker image tagged with
 	$(call docker_build_push,nightly,nightly)
 
 # Create a Docker image using the main Dockerfile
+# JIT needs an LLVM 22 base image; off by default for portable image builds.
+DOCKER_ENABLE_JIT ?= false
 define docker_build_push
 	docker buildx build --file ./Dockerfile . \
 		--platform linux/amd64 \
@@ -255,6 +257,7 @@ define docker_build_push
 		--tag $(DOCKER_IMAGE_NAME):$(2) \
 		--build-arg BUILD_PROFILE="$(PROFILE)" \
 		--build-arg FEATURES="jemalloc,asm-keccak" \
+		--build-arg ENABLE_JIT="$(DOCKER_ENABLE_JIT)" \
 		--provenance=false \
 		--push
 endef
