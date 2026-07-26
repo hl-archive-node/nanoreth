@@ -91,7 +91,7 @@ where
             .then(|| ctx.ctx.withdrawals.map(|w| w.into_owned()).unwrap_or_default());
 
         let withdrawals_root =
-            withdrawals.as_deref().map(|w| proofs::calculate_withdrawals_root(w));
+            withdrawals.as_deref().map(proofs::calculate_withdrawals_root);
         let requests_hash = inner
             .chain_spec
             .is_prague_active_at_timestamp(timestamp)

@@ -22,6 +22,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
+      # The `jit` feature is on by default and builds revmc, which needs LLVM 22 to link.
+      # revmc is pinned with `llvm-prefer-static`, so the released binary stays self-contained.
+      - name: Install LLVM
+        run: sudo .github/scripts/install_llvm_ubuntu.sh 22
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
         with:
