@@ -14,21 +14,17 @@ use alloy_primitives::{Address, TxHash, U256, address, uint};
 use alloy_rpc_types::{Transaction, TransactionInfo, TransactionRequest};
 use alloy_signer::Signature;
 use reth_codecs::alloy::transaction::{Envelope, FromTxCompact};
-use reth_db::{
-    DatabaseError,
-    table::{Compress, Decompress},
-};
+use reth_codecs::DecompressError;
+use reth_db::table::{Compress, Decompress};
 use reth_ethereum_primitives::PooledTransactionVariant;
 use reth_evm::FromRecoveredTx;
-use reth_primitives::Recovered;
-use reth_primitives_traits::{
-    InMemorySize, SignedTransaction, SignerRecoverable, serde_bincode_compat::SerdeBincodeCompat,
-};
-use reth_rpc_eth_api::{
-    EthTxEnvError, SignTxRequestError, SignableTxRequest, TryIntoSimTx,
-    transaction::{FromConsensusTx, TryIntoTxEnv},
-};
-use revm::context::{BlockEnv, CfgEnv, TxEnv};
+use reth_primitives_traits::Recovered;
+use reth_primitives_traits::{InMemorySize, SignerRecoverable};
+use reth_rpc_convert::{FromConsensusTx, TryIntoTxEnv};
+use reth_rpc_eth_api::{EthTxEnvError, SignTxRequestError, SignableTxRequest, TryIntoSimTx};
+use crate::evm::spec::HlSpecId;
+use reth_evm::EvmEnv;
+use revm::context::{BlockEnv, TxEnv};
 
 type InnerType = alloy_consensus::EthereumTxEnvelope<TxEip4844>;
 
@@ -100,8 +96,6 @@ impl SignerRecoverable for TransactionSigned {
         self.inner().recover_unchecked_with_buf(buf)
     }
 }
-
-impl SignedTransaction for TransactionSigned {}
 
 // ------------------------------------------------------------
 // NOTE: All lines below are just wrappers for the inner type.
@@ -190,21 +184,6 @@ impl TransactionSigned {
     }
 }
 
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-pub struct BincodeCompatTxCustom(pub TransactionSigned);
-
-impl SerdeBincodeCompat for TransactionSigned {
-    type BincodeRepr<'a> = BincodeCompatTxCustom;
-
-    fn as_repr(&self) -> Self::BincodeRepr<'_> {
-        BincodeCompatTxCustom(self.clone())
-    }
-
-    fn from_repr(repr: Self::BincodeRepr<'_>) -> Self {
-        repr.0
-    }
-}
-
 impl TryFrom<TransactionSigned> for PooledTransactionVariant {
     type Error = <InnerType as TryInto<PooledTransactionVariant>>::Error;
 
@@ -228,7 +207,7 @@ impl Compress for TransactionSigned {
 }
 
 impl Decompress for TransactionSigned {
-    fn decompress(value: &[u8]) -> Result<Self, DatabaseError> {
+    fn decompress(value: &[u8]) -> Result<Self, DecompressError> {
         Ok(Self::Default(InnerType::decompress(value)?))
     }
 }
@@ -246,15 +225,22 @@ impl TryIntoSimTx<TransactionSigned> for TransactionRequest {
     }
 }
 
-impl TryIntoTxEnv<HlTxEnv<TxEnv>> for TransactionRequest {
+impl TryIntoTxEnv<HlTxEnv<TxEnv>, HlSpecId, BlockEnv> for TransactionRequest {
     type Err = EthTxEnvError;
 
-    fn try_into_tx_env<Spec>(
+    fn try_into_tx_env(
         self,
-        cfg_env: &CfgEnv<Spec>,
-        block_env: &BlockEnv,
+        evm_env: &EvmEnv<HlSpecId, BlockEnv>,
     ) -> Result<HlTxEnv<TxEnv>, Self::Err> {
-        Ok(HlTxEnv::new(self.clone().try_into_tx_env(cfg_env, block_env)?))
+        // The inner ethereum conversion works off the mapped ethereum spec.
+        let eth_env = EvmEnv {
+            cfg_env: evm_env
+                .cfg_env
+                .clone()
+                .with_spec_and_mainnet_gas_params(evm_env.cfg_env.spec.into_eth_spec()),
+            block_env: evm_env.block_env.clone(),
+        };
+        Ok(HlTxEnv::new(self.clone().try_into_tx_env(&eth_env)?))
     }
 }
 

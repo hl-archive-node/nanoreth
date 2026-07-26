@@ -24,8 +24,7 @@ use reth_engine_primitives::ConsensusEngineHandle;
 use reth_eth_wire::{BasicNetworkPrimitives, NewBlock, NewBlockPayload};
 use reth_ethereum_primitives::PooledTransactionVariant;
 use reth_network::{NetworkConfig, NetworkHandle, NetworkManager};
-use reth_network_api::PeersInfo;
-use reth_payload_primitives::EngineApiMessageVersion;
+use reth_network_api::{NetworkInfo, PeersInfo};
 use reth_provider::StageCheckpointReader;
 use reth_stages_types::StageId;
 use reth_storage_api::BlockNumReader;
@@ -173,7 +172,7 @@ impl HlNetworkBuilder {
         let handle = ImportHandle::new(to_import, import_outcome);
         let consensus = Arc::new(HlConsensus { provider: ctx.provider().clone() });
 
-        ctx.task_executor().spawn_critical("block import", async move {
+        ctx.task_executor().spawn_critical_task("block import", async move {
             let engine = self
                 .engine_handle_rx
                 .lock()
@@ -203,7 +202,7 @@ impl HlNetworkBuilder {
                     "Sending initial forkchoice update to trigger pipeline"
                 );
                 let _ = engine
-                    .fork_choice_updated(state, None, EngineApiMessageVersion::default())
+                    .fork_choice_updated(state, None)
                     .await;
             }
 
@@ -259,6 +258,15 @@ where
         let local_node_record = handle.local_node_record();
         info!(target: "reth::cli", enode=%local_node_record, "P2P networking initialized");
 
+        // The pseudo peer dials this record from the same host. `local_node_record` reports the
+        // externally advertised address (NAT-resolved), which is not what the listener is bound to
+        // when the network is restricted to localhost, so dial the bound address directly.
+        let mut pseudo_peer_addr = handle.local_addr();
+        if pseudo_peer_addr.ip().is_unspecified() {
+            pseudo_peer_addr.set_ip(Ipv4Addr::LOCALHOST.into());
+        }
+        let pseudo_peer_record = NodeRecord::new(pseudo_peer_addr, *handle.peer_id());
+
         if let Some(block_source_config) = block_source_config {
             let next_block_number = ctx
                 .provider()
@@ -275,7 +283,8 @@ where
             });
 
             let chain_spec = ctx.chain_spec();
-            ctx.task_executor().spawn_critical("pseudo peer", async move {
+            let pseudo_peer_runtime = ctx.task_executor().clone();
+            ctx.task_executor().spawn_critical_task("pseudo peer", async move {
                 let block_store = block_source_config
                     .create_block_store(
                         (*chain_spec).clone(),
@@ -288,7 +297,12 @@ where
                 // via a direct forkchoice update. This must happen before
                 // start_pseudo_peer (which never returns).
                 // get_by_number auto-indexes the block's hash AND parent hash.
-                if let Some(latest) = block_store.find_latest_block_number().await {
+                // `--debug-cutoff-height` bounds the sync target as well as the poller, so a
+                // capped run backfills to that height instead of chasing the real tip.
+                let latest = block_store.find_latest_block_number().await.map(|latest| {
+                    debug_cutoff_height.map_or(latest, |cutoff| latest.min(cutoff))
+                });
+                if let Some(latest) = latest {
                     match block_store.get_by_number(latest).await {
                         Ok(block) => {
                             let hash = block.hash();
@@ -312,9 +326,10 @@ where
 
                 start_pseudo_peer(
                     chain_spec.clone(),
-                    local_node_record.to_string(),
+                    pseudo_peer_record.to_string(),
                     block_store,
                     debug_cutoff_height,
+                    pseudo_peer_runtime,
                 )
                 .await
                 .unwrap();

@@ -2,7 +2,7 @@ use crate::node::primitives::TransactionSigned;
 use alloy_consensus::Transaction as _;
 use alloy_rpc_types::AccessList;
 use auto_impl::auto_impl;
-use reth_evm::{FromRecoveredTx, FromTxWithEncoded, IntoTxEnv, TransactionEnv};
+use reth_evm::{FromRecoveredTx, FromTxWithEncoded, IntoTxEnv, TransactionEnvMut};
 use reth_primitives_traits::SignerRecoverable;
 use revm::{
     context::TxEnv,
@@ -124,7 +124,7 @@ impl FromRecoveredTx<TransactionSigned> for HlTxEnv<TxEnv> {
 
 impl FromTxWithEncoded<TransactionSigned> for HlTxEnv<TxEnv> {
     fn from_encoded_tx(tx: &TransactionSigned, sender: Address, _encoded: Bytes) -> Self {
-        use reth_primitives::Transaction;
+        use reth_ethereum_primitives::Transaction;
         let base = match tx.clone().into_inner().into_typed_transaction() {
             Transaction::Legacy(tx) => TxEnv::from_recovered_tx(&tx, sender),
             Transaction::Eip2930(tx) => TxEnv::from_recovered_tx(&tx, sender),
@@ -137,13 +137,9 @@ impl FromTxWithEncoded<TransactionSigned> for HlTxEnv<TxEnv> {
     }
 }
 
-impl<T: TransactionEnv> TransactionEnv for HlTxEnv<T> {
+impl<T: TransactionEnvMut> TransactionEnvMut for HlTxEnv<T> {
     fn set_gas_limit(&mut self, gas_limit: u64) {
         self.base.set_gas_limit(gas_limit);
-    }
-
-    fn nonce(&self) -> u64 {
-        TransactionEnv::nonce(&self.base)
     }
 
     fn set_nonce(&mut self, nonce: u64) {

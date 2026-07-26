@@ -13,12 +13,14 @@ use reth::{
 };
 use reth_engine_primitives::{ExecutionPayload, PayloadValidator};
 use reth_payload_primitives::NewPayloadError;
-use reth_primitives::{RecoveredBlock, SealedBlock};
+use reth_primitives_traits::SealedBlock;
 use reth_primitives_traits::Block as _;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use super::payload::HlPayloadTypes;
+use crate::node::engine::HlBuiltPayload;
+use reth_payload_primitives::BuiltPayload;
 
 #[derive(Debug, Default, Clone)]
 #[non_exhaustive]
@@ -80,18 +82,38 @@ impl ExecutionPayload for HlExecutionData {
     fn gas_used(&self) -> u64 {
         self.0.header.gas_used()
     }
+
+    fn gas_limit(&self) -> u64 {
+        self.0.header.gas_limit()
+    }
+
+    fn block_access_list(&self) -> Option<&alloy_primitives::Bytes> {
+        None
+    }
+
+    fn transaction_count(&self) -> usize {
+        self.0.body.transactions.len()
+    }
+
+    fn slot_number(&self) -> Option<u64> {
+        None
+    }
+}
+
+impl From<HlBuiltPayload> for HlExecutionData {
+    fn from(value: HlBuiltPayload) -> Self {
+        Self(value.block().clone().into_block())
+    }
 }
 
 impl PayloadValidator<HlPayloadTypes> for HlPayloadValidator {
     type Block = HlBlock;
 
-    fn ensure_well_formed_payload(
+    fn convert_payload_to_block(
         &self,
         payload: HlExecutionData,
-    ) -> Result<RecoveredBlock<Self::Block>, NewPayloadError> {
-        let sealed_block =
-            self.inner.ensure_well_formed_payload(payload).map_err(NewPayloadError::other)?;
-        sealed_block.try_recover().map_err(|e| NewPayloadError::Other(e.into()))
+    ) -> Result<SealedBlock<Self::Block>, NewPayloadError> {
+        self.inner.ensure_well_formed_payload(payload).map_err(NewPayloadError::other)
     }
 }
 

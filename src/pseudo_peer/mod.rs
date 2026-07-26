@@ -12,6 +12,8 @@ pub mod service;
 pub mod sources;
 pub mod utils;
 
+use reth::tasks::Runtime;
+use reth_metrics::common::mpsc::memory_bounded_channel;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{error, info};
@@ -39,12 +41,16 @@ use reth_network::{NetworkEvent, NetworkEventListenerProvider};
 use reth_network_api::Peers;
 use std::str::FromStr;
 
+/// Memory budget for the (drained-and-discarded) transaction event channel.
+const TX_EVENT_CHANNEL_MEMORY_LIMIT_BYTES: usize = 4 * 1024 * 1024;
+
 /// Main function that starts the network manager and processes eth requests
 pub async fn start_pseudo_peer(
     chain_spec: Arc<HlChainSpec>,
     destination_peer: String,
     block_store: Arc<BlockStore>,
     debug_cutoff_height: Option<u64>,
+    runtime: Runtime,
 ) -> eyre::Result<()> {
 
     // Parse the destination peer enode string
@@ -56,12 +62,16 @@ pub async fn start_pseudo_peer(
         (*chain_spec).clone(),
         block_store.clone(),
         debug_cutoff_height,
+        runtime,
     )
     .await?;
 
     // Create the channels for receiving eth messages
     let (eth_tx, mut eth_rx) = mpsc::channel(32);
-    let (transaction_tx, mut transaction_rx) = mpsc::unbounded_channel();
+    // The network manager now takes a memory-bounded sender for transaction events; the
+    // pseudo peer only drains it, so the exact budget is irrelevant.
+    let (transaction_tx, mut transaction_rx) =
+        memory_bounded_channel(TX_EVENT_CHANNEL_MEMORY_LIMIT_BYTES, "pseudo_peer.transactions");
 
     network.set_eth_request_handler(eth_tx);
     network.set_transactions(transaction_tx);

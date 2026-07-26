@@ -8,6 +8,7 @@ use super::{
     },
 };
 use aws_config::BehaviorVersion;
+use tracing::info;
 use std::{env::home_dir, path::PathBuf, sync::Arc, time::Duration};
 
 #[derive(Debug, Clone)]
@@ -122,8 +123,17 @@ impl BlockSourceConfig {
 }
 
 async fn s3_block_source(bucket: impl AsRef<str>, polling_interval: Duration) -> BlockSourceBoxed {
-    let client = aws_sdk_s3::Client::new(
-        &aws_config::defaults(BehaviorVersion::latest()).region("ap-northeast-1").load().await,
-    );
+    let config = aws_config::defaults(BehaviorVersion::latest()).region("ap-northeast-1").load().await;
+    let mut s3_config = aws_sdk_s3::config::Builder::from(&config);
+
+    // Optional read-through cache (see the `s3-proxy` tool). Block objects are immutable, so a
+    // local mirror serves repeated syncs without re-paying S3 latency or requester-pays egress.
+    // Path-style addressing is required: the proxy is reached by address, not by bucket hostname.
+    if let Ok(endpoint) = std::env::var("HL_S3_ENDPOINT_URL") {
+        info!("Using S3 endpoint override: {endpoint}");
+        s3_config = s3_config.endpoint_url(endpoint).force_path_style(true);
+    }
+
+    let client = aws_sdk_s3::Client::from_conf(s3_config.build());
     Arc::new(Box::new(S3BlockSource::new(client, bucket.as_ref().to_string(), polling_interval)))
 }

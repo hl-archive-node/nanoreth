@@ -1,7 +1,7 @@
 use alloy_chains::{Chain, NamedChain};
 use alloy_primitives::{Address, B64, B256, Bytes, U256, b256};
 use reth_chainspec::{ChainHardforks, ChainSpec, EthereumHardfork, ForkCondition, Hardfork};
-use reth_primitives::{Header, SealedHeader};
+use reth_primitives_traits::{Header, SealedHeader};
 use std::sync::LazyLock;
 
 static GENESIS_HASH: B256 =
@@ -85,6 +85,8 @@ fn empty_genesis_header() -> SealedHeader {
             excess_blob_gas: Some(0),
             parent_beacon_block_root: Some(B256::ZERO),
             requests_hash: Some(B256::ZERO),
+            block_access_list_hash: None,
+            slot_number: None,
         },
         GENESIS_HASH,
     )

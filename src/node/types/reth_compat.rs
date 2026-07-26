@@ -4,7 +4,7 @@ use alloy_consensus::{Header, Signed, TxEip1559, TxEip2930, TxEip4844, TxEip7702
 use alloy_primitives::{Address, BlockHash, Bytes, Signature, TxKind, U256};
 use reth_db::{DatabaseEnv, DatabaseError, cursor::DbCursorRW};
 use reth_db_api::{Database, transaction::DbTxMut};
-use reth_primitives::TransactionSigned as RethTxSigned;
+use reth_ethereum_primitives::TransactionSigned as RethTxSigned;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
@@ -27,11 +27,53 @@ use crate::{
 /// Transaction types were introduced in [EIP-2718](https://eips.ethereum.org/EIPS/eip-2718).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, derive_more::From, Serialize, Deserialize)]
 pub enum Transaction {
-    Legacy(TxLegacy),
+    Legacy(WireTxLegacy),
     Eip2930(TxEip2930),
     Eip1559(TxEip1559),
     Eip4844(TxEip4844),
     Eip7702(TxEip7702),
+}
+
+/// Wire-format mirror of [`TxLegacy`].
+///
+/// alloy 2.x deserializes `TxLegacy::gas_price` through `U256` while still serializing it as
+/// `U128` (see the `gas_price` module in alloy-consensus, added for alloy-rs/alloy#2842). The
+/// asymmetry is invisible in JSON, where both are hex strings, but it breaks binary formats: in
+/// the msgpack hl-node writes, the field is 16 bytes on the wire and the `U256` visitor rejects
+/// it with "invalid length 16, expected 256 bits".
+///
+/// This mirror keeps the symmetric `quantity` codec so the wire format stays decodable, and
+/// converts into the alloy type afterwards. Every other `u128` tx field already uses
+/// `alloy_serde::quantity` on both sides and is unaffected.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WireTxLegacy {
+    #[serde(default, with = "alloy_serde::quantity::opt", skip_serializing_if = "Option::is_none")]
+    pub chain_id: Option<alloy_primitives::ChainId>,
+    #[serde(with = "alloy_serde::quantity")]
+    pub nonce: u64,
+    #[serde(with = "alloy_serde::quantity")]
+    pub gas_price: u128,
+    #[serde(with = "alloy_serde::quantity", rename = "gas", alias = "gasLimit")]
+    pub gas_limit: u64,
+    #[serde(default)]
+    pub to: TxKind,
+    pub value: U256,
+    pub input: Bytes,
+}
+
+impl From<WireTxLegacy> for TxLegacy {
+    fn from(tx: WireTxLegacy) -> Self {
+        let WireTxLegacy { chain_id, nonce, gas_price, gas_limit, to, value, input } = tx;
+        Self { chain_id, nonce, gas_price, gas_limit, to, value, input }
+    }
+}
+
+impl From<TxLegacy> for WireTxLegacy {
+    fn from(tx: TxLegacy) -> Self {
+        let TxLegacy { chain_id, nonce, gas_price, gas_limit, to, value, input } = tx;
+        Self { chain_id, nonce, gas_price, gas_limit, to, value, input }
+    }
 }
 
 /// Signed Ethereum transaction.
@@ -55,7 +97,7 @@ impl TransactionSigned {
         match inner {
             EthereumTxEnvelope::Legacy(signed) => {
                 let (tx, sig, _) = signed.into_parts();
-                Self { signature: sig, transaction: Transaction::Legacy(tx) }
+                Self { signature: sig, transaction: Transaction::Legacy(tx.into()) }
             }
             EthereumTxEnvelope::Eip2930(signed) => {
                 let (tx, sig, _) = signed.into_parts();
@@ -82,7 +124,7 @@ impl TransactionSigned {
         use alloy_consensus::EthereumTxEnvelope;
         let inner = tx.into_inner();
         match inner {
-            EthereumTxEnvelope::Legacy(signed) => Transaction::Legacy(signed.into_parts().0),
+            EthereumTxEnvelope::Legacy(signed) => Transaction::Legacy(signed.into_parts().0.into()),
             EthereumTxEnvelope::Eip2930(signed) => Transaction::Eip2930(signed.into_parts().0),
             EthereumTxEnvelope::Eip1559(signed) => Transaction::Eip1559(signed.into_parts().0),
             EthereumTxEnvelope::Eip4844(signed) => Transaction::Eip4844(signed.into_parts().0),
@@ -93,7 +135,7 @@ impl TransactionSigned {
     fn to_reth_transaction(&self) -> TxSigned {
         match self.transaction.clone() {
             Transaction::Legacy(tx) => {
-                TxSigned::Default(RethTxSigned::Legacy(Signed::new_unhashed(tx, self.signature)))
+                TxSigned::Default(RethTxSigned::Legacy(Signed::new_unhashed(tx.into(), self.signature)))
             }
             Transaction::Eip2930(tx) => {
                 TxSigned::Default(RethTxSigned::Eip2930(Signed::new_unhashed(tx, self.signature)))
@@ -228,7 +270,7 @@ fn system_tx_to_reth_transaction(
         }
     };
     let signature = Signature::new(U256::from(0x1), s, true);
-    TxSigned::Default(RethTxSigned::Legacy(Signed::new_unhashed(tx.clone(), signature)))
+    TxSigned::Default(RethTxSigned::Legacy(Signed::new_unhashed(tx.clone().into(), signature)))
 }
 
 impl SealedBlock {
@@ -255,7 +297,7 @@ impl SealedBlock {
         merged_receipts.extend(receipts.into_iter().map(From::from));
 
         let block_body = HlBlockBody {
-            inner: reth_primitives::BlockBody {
+            inner: crate::node::primitives::BlockBody {
                 transactions: merged_txs,
                 withdrawals: self.body.withdrawals.clone(),
                 ommers: vec![],
@@ -279,6 +321,38 @@ impl SealedBlock {
 
 #[cfg(test)]
 mod tests {
+
+    /// hl-node encodes `u128` gas fields as 16-byte msgpack binaries. alloy 2.x serializes
+    /// `TxLegacy::gas_price` as `U128` but deserializes it through `U256`, which is invisible in
+    /// JSON yet makes the binary wire format undecodable ("invalid length 16, expected 256 bits").
+    /// [`WireTxLegacy`] restores the symmetric codec; this guards against regressing to the alloy
+    /// type in the wire structs.
+    #[test]
+    fn legacy_tx_survives_msgpack_round_trip() {
+        let tx = Transaction::Legacy(WireTxLegacy {
+            chain_id: Some(999),
+            nonce: 7,
+            gas_price: 110_000_000,
+            gas_limit: 21_000,
+            to: TxKind::Call(Address::ZERO),
+            value: U256::from(1u64),
+            input: Bytes::new(),
+        });
+
+        let encoded = rmp_serde::to_vec_named(&tx).expect("serialize");
+        let decoded: Transaction = rmp_serde::from_slice(&encoded).expect("deserialize");
+        assert_eq!(tx, decoded);
+    }
+
+    /// The gas price must survive as a 16-byte value, matching what hl-node writes.
+    #[test]
+    fn legacy_gas_price_is_16_bytes_on_the_wire() {
+        let tx = WireTxLegacy { gas_price: 110_000_000, ..Default::default() };
+        let encoded = rmp_serde::to_vec_named(&tx).expect("serialize");
+        let decoded: WireTxLegacy = rmp_serde::from_slice(&encoded).expect("deserialize");
+        assert_eq!(decoded.gas_price, 110_000_000);
+    }
+
     use super::*;
     use crate::chainspec::TESTNET_CHAIN_ID;
     use alloy_consensus::{Transaction as _, TxType};
@@ -324,7 +398,8 @@ mod tests {
                 value: U256::ZERO,
                 // transfer(address,uint256) selector; input non-empty
                 input: Bytes::from_static(&[0xa9, 0x05, 0x9c, 0xbb]),
-            }),
+            }
+            .into()),
             receipt: Some(receipt),
             // `from` path set explicitly per-test.
             from: None,
@@ -383,7 +458,8 @@ mod tests {
                 to: TxKind::Call(TOKEN),
                 value: U256::ZERO,
                 input: Bytes::new(),
-            }),
+            }
+            .into()),
             receipt: Some(receipt),
             from: None,
         };

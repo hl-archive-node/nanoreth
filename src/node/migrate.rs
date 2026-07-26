@@ -20,10 +20,11 @@ use reth_db_api::{
 };
 use reth_errors::ProviderResult;
 use reth_ethereum_primitives::EthereumReceipt;
+use reth::tasks::Runtime;
 use reth_provider::{
     DatabaseProvider, ProviderFactory, ReceiptProvider, StaticFileProviderFactory,
-    StaticFileSegment, StaticFileWriter,
-    providers::{NodeTypesForProvider, StaticFileProvider},
+    StaticFileSegment, StaticFileWriter, to_range,
+    providers::{NodeTypesForProvider, RocksDBProvider, StaticFileProvider},
     static_file::SegmentRangeInclusive,
 };
 use std::{fs::File, io::Write, path::PathBuf, sync::Arc};
@@ -49,9 +50,11 @@ impl<N: HlNodeType> Migrator<N> {
         chain_spec: HlChainSpec,
         datadir: DatadirArgs,
         database_args: DatabaseArgs,
+        runtime: Runtime,
     ) -> eyre::Result<Self> {
         let data_dir = datadir.clone().resolve_datadir(chain_spec.chain());
-        let provider_factory = Self::provider_factory(chain_spec, datadir, database_args)?;
+        let provider_factory =
+            Self::provider_factory(chain_spec, datadir, database_args, runtime)?;
         Ok(Self { data_dir, provider_factory })
     }
 
@@ -91,12 +94,21 @@ impl<N: HlNodeType> Migrator<N> {
         chain_spec: HlChainSpec,
         datadir: DatadirArgs,
         database_args: DatabaseArgs,
+        runtime: Runtime,
     ) -> eyre::Result<ProviderFactory<NodeTypesWithDBAdapter<N, Arc<DatabaseEnv>>>> {
         let data_dir = datadir.clone().resolve_datadir(chain_spec.chain());
         let db_env = reth_db::init_db(data_dir.db(), database_args.database_args())?;
-        let static_file_provider = StaticFileProvider::read_only(data_dir.static_files(), false)?;
+        let static_file_provider = StaticFileProvider::read_only(data_dir.static_files())?;
+        let rocksdb_provider =
+            RocksDBProvider::builder(data_dir.rocksdb()).with_default_tables().build()?;
         let db = Arc::new(db_env);
-        Ok(ProviderFactory::new(db, Arc::new(chain_spec), static_file_provider))
+        Ok(ProviderFactory::new(
+            db,
+            Arc::new(chain_spec),
+            static_file_provider,
+            rocksdb_provider,
+            runtime,
+        )?)
     }
 }
 
@@ -265,7 +277,7 @@ impl<'a, N: HlNodeType> MigrateStaticFiles<'a, N> {
 
         let mut all_static_files = iter_static_files(&old_path)?;
         let all_static_files =
-            all_static_files.remove(&StaticFileSegment::Headers).unwrap_or_default();
+            all_static_files.remove(StaticFileSegment::Headers).unwrap_or_default();
 
         let mut first = true;
 
@@ -288,7 +300,7 @@ impl<'a, N: HlNodeType> MigrateStaticFiles<'a, N> {
             let sf_provider = self.0.sf_provider();
             let sf_tmp_provider = StaticFileProvider::<HlPrimitives>::read_write(&conversion_tmp)?;
             let provider = self.0.provider_factory.provider()?;
-            let block_range_for_filename = sf_provider.find_fixed_range(block_range.start());
+            let block_range_for_filename = sf_provider.find_fixed_range(StaticFileSegment::Headers, block_range.start());
             migrate_single_static_file(&sf_tmp_provider, &sf_provider, &provider, block_range)?;
 
             self.move_static_files_for_segment(block_range_for_filename)?;
@@ -364,7 +376,7 @@ fn migrate_single_static_file<N: HlNodeType>(
             })
             .collect::<Vec<_>>();
         for header in new_headers {
-            writer.append_header(&header.0, header.1, &header.2)?;
+            writer.append_header(&header.0, &header.2)?;
         }
         writer.commit().unwrap();
         info!("Migrated block range {:?}...", block_range);
@@ -396,22 +408,6 @@ fn old_headers_range(
         .collect())
 }
 
-// Copied from reth
-fn to_range<R: std::ops::RangeBounds<u64>>(bounds: R) -> std::ops::Range<u64> {
-    let start = match bounds.start_bound() {
-        std::ops::Bound::Included(&v) => v,
-        std::ops::Bound::Excluded(&v) => v + 1,
-        std::ops::Bound::Unbounded => 0,
-    };
-
-    let end = match bounds.end_bound() {
-        std::ops::Bound::Included(&v) => v + 1,
-        std::ops::Bound::Excluded(&v) => v,
-        std::ops::Bound::Unbounded => u64::MAX,
-    };
-
-    start..end
-}
 
 fn using_old_header(number: u64, header: &[u8]) -> bool {
     let deserialized_old = is_old_header(header);

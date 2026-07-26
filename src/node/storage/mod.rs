@@ -13,7 +13,7 @@ use reth_db::{
 use reth_primitives_traits::Block;
 use reth_provider::{
     BlockBodyReader, BlockBodyWriter, ChainSpecProvider, ChainStorageReader, ChainStorageWriter,
-    DBProvider, DatabaseProvider, EthStorage, ProviderResult, ReadBodyInput, StorageLocation,
+    DBProvider, DatabaseProvider, EthStorage, ProviderResult, ReadBodyInput,
     providers::{ChainStorage, NodeTypesForProvider},
 };
 
@@ -80,27 +80,27 @@ where
     fn write_block_bodies(
         &self,
         provider: &Provider,
-        bodies: Vec<(u64, Option<HlBlockBody>)>,
-        write_to: StorageLocation,
+        bodies: Vec<(u64, Option<&HlBlockBody>)>,
     ) -> ProviderResult<()> {
         let mut eth_bodies = Vec::with_capacity(bodies.len());
         let mut read_precompile_calls = Vec::with_capacity(bodies.len());
 
         for (block_number, body) in bodies {
             let (inner_opt, extras) = match body {
-                Some(HlBlockBody {
-                    inner,
-                    sidecars: _,
-                    read_precompile_calls,
-                    highest_precompile_address,
-                }) => (Some(inner), HlExtras { read_precompile_calls, highest_precompile_address }),
-                None => Default::default(),
+                Some(body) => (
+                    Some(&body.inner),
+                    HlExtras {
+                        read_precompile_calls: body.read_precompile_calls.clone(),
+                        highest_precompile_address: body.highest_precompile_address,
+                    },
+                ),
+                None => (None, HlExtras::default()),
             };
             eth_bodies.push((block_number, inner_opt));
             read_precompile_calls.push((block_number, extras));
         }
 
-        self.0.write_block_bodies(provider, eth_bodies, write_to)?;
+        self.0.write_block_bodies(provider, eth_bodies)?;
         self.write_precompile_calls(provider, read_precompile_calls)?;
 
         Ok(())
@@ -110,9 +110,8 @@ where
         &self,
         provider: &Provider,
         block: u64,
-        remove_from: StorageLocation,
     ) -> ProviderResult<()> {
-        self.0.remove_block_bodies_above(provider, block, remove_from)?;
+        self.0.remove_block_bodies_above(provider, block)?;
         provider.tx_ref().unwind_table_by_num::<tables::BlockReadPrecompileCalls>(block)?;
 
         Ok(())

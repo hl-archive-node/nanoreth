@@ -1,12 +1,11 @@
 use alloy_consensus::Header;
 use alloy_primitives::{Address, B64, B256, BlockNumber, Bloom, Bytes, Sealable, U256};
 use alloy_rlp::{RlpDecodable, RlpEncodable};
-use reth_cli_commands::common::CliHeader;
 use reth_codecs::Compact;
 use reth_ethereum_primitives::EthereumReceipt;
-use reth_primitives::{SealedHeader, logs_bloom};
-use reth_primitives_traits::{BlockHeader, InMemorySize, serde_bincode_compat::RlpBincode};
-use reth_rpc_convert::transaction::FromConsensusHeader;
+use reth_primitives_traits::{SealedHeader, logs_bloom};
+use reth_primitives_traits::{BlockHeader, InMemorySize, header::HeaderMut};
+use reth_rpc_convert::FromConsensusHeader;
 use serde::{Deserialize, Serialize};
 
 /// The header type of this node
@@ -164,6 +163,14 @@ impl alloy_consensus::BlockHeader for HlHeader {
     fn is_empty(&self) -> bool {
         self.extras.system_tx_count == 0 && self.inner.is_empty()
     }
+    fn block_access_list_hash(&self) -> Option<B256> {
+        self.inner.block_access_list_hash()
+    }
+
+    fn slot_number(&self) -> Option<u64> {
+        self.inner.slot_number()
+    }
+
 }
 
 impl InMemorySize for HlHeader {
@@ -210,7 +217,7 @@ impl reth_db_api::table::Compress for HlHeader {
 }
 
 impl reth_db_api::table::Decompress for HlHeader {
-    fn decompress(value: &[u8]) -> Result<Self, reth_db_api::DatabaseError> {
+    fn decompress(value: &[u8]) -> Result<Self, reth_codecs::DecompressError> {
         let (obj, _) = Compact::from_compact(value, value.len());
         Ok(obj)
     }
@@ -218,11 +225,38 @@ impl reth_db_api::table::Decompress for HlHeader {
 
 impl BlockHeader for HlHeader {}
 
-impl RlpBincode for HlHeader {}
 
-impl CliHeader for HlHeader {
-    fn set_number(&mut self, number: u64) {
-        self.inner.set_number(number);
+impl HeaderMut for HlHeader {
+    fn set_parent_hash(&mut self, hash: B256) {
+        self.inner.set_parent_hash(hash);
+    }
+
+    fn set_block_number(&mut self, number: BlockNumber) {
+        self.inner.set_block_number(number);
+    }
+
+    fn set_timestamp(&mut self, timestamp: u64) {
+        self.inner.set_timestamp(timestamp);
+    }
+
+    fn set_state_root(&mut self, state_root: B256) {
+        self.inner.set_state_root(state_root);
+    }
+
+    fn set_difficulty(&mut self, difficulty: U256) {
+        self.inner.set_difficulty(difficulty);
+    }
+
+    fn set_mix_hash(&mut self, mix_hash: B256) {
+        self.inner.set_mix_hash(mix_hash);
+    }
+
+    fn set_extra_data(&mut self, extra_data: Bytes) {
+        self.inner.set_extra_data(extra_data);
+    }
+
+    fn set_parent_beacon_block_root(&mut self, parent_beacon_block_root: Option<B256>) {
+        self.inner.set_parent_beacon_block_root(parent_beacon_block_root);
     }
 }
 

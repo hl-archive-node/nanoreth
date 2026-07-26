@@ -46,7 +46,7 @@ fn main() -> eyre::Result<()> {
     reth_hl::version::init_reth_hl_version();
 
     Cli::<HlChainSpecParser, HlNodeArgs>::parse().run(
-        |builder: WithLaunchContext<NodeBuilder<Arc<DatabaseEnv>, HlChainSpec>>,
+        |builder: WithLaunchContext<NodeBuilder<DatabaseEnv, HlChainSpec>>,
          ext: HlNodeArgs| async move {
             // Apply spot-meta CLI overrides before anything fetches metadata.
             spot_meta::set_spot_meta_url(ext.spot_meta_url.clone());
@@ -58,6 +58,8 @@ fn main() -> eyre::Result<()> {
             spot_meta::add_spot_meta_overrides(spot_meta_overrides);
 
             let default_upstream_rpc_url = builder.config().chain.official_rpc_url();
+
+            reth_hl::evm::jit::start(ext.jit, ext.jit_hot_threshold, ext.jit_worker_count)?;
 
             let enable_sync_server = ext.enable_sync_server;
             let hl_node_compliant_default = ext.hl_node_compliant;
@@ -101,7 +103,7 @@ fn main() -> eyre::Result<()> {
                         SubscribeFixup::new(
                             Arc::new(ctx.registry.eth_handlers().pubsub.clone()),
                             Arc::new(ctx.registry.eth_api().provider().clone()),
-                            Box::new(ctx.node().task_executor.clone()),
+                            ctx.node().task_executor.clone(),
                         )
                         .into_rpc(),
                     )?;
@@ -158,7 +160,7 @@ fn main() -> eyre::Result<()> {
                         return Ok(());
                     }
 
-                    ctx.node().task_executor.clone().spawn_critical(
+                    ctx.node().task_executor.clone().spawn_critical_task(
                         "hl-rpc-server-restart",
                         Box::pin(server_restart::restart_servers(
                             handles.rpc,
@@ -173,10 +175,10 @@ fn main() -> eyre::Result<()> {
                     Ok(())
                 })
                 .apply(|mut builder| {
-                    builder.db_mut().create_tables_for::<Tables>().expect("create tables");
+                    builder.db_mut().create_and_track_tables_for::<Tables>().expect("create tables");
 
                     let chain_id = builder.config().chain.inner.chain().id();
-                    let db = builder.db_mut().clone();
+                    let db = Arc::new(builder.db_mut().clone());
 
                     // Set database handle for on-demand persistence
                     set_spot_metadata_db(db.clone());
