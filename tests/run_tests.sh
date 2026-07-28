@@ -90,6 +90,26 @@ echo "$TRACE_RESULT" | jq -e \
     ' > /dev/null \
     && success "$TITLE" || fail "$TITLE - trace_block missing expected tx hashes"
 
+TITLE="SELFDESTRUCT no-op must not produce phantom traces"
+SELFDESTRUCT_TX=0xf6267312b72427da6b27d3b8e6dd7e30cd5b434ab591f0f9acf6832541ed3fc2
+for REQUEST in \
+    "debug_traceTransaction:[\"$SELFDESTRUCT_TX\",{\"tracer\":\"callTracer\"}]" \
+    "trace_replayTransaction:[\"$SELFDESTRUCT_TX\",[\"trace\",\"stateDiff\"]]" \
+    ; do
+    METHOD=${REQUEST%%:*}
+    PARAMS=${REQUEST#*:}
+    RESULT=$(curl -sS -H 'content-type: application/json' \
+        -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"$METHOD\",\"params\":$PARAMS}" \
+        "$TRACE_RPC_URL")
+    echo "$RESULT" | jq -e '
+        (.error | not) and has("result") and
+        ([.. | objects | .type? | strings | ascii_downcase |
+            select(. == "selfdestruct" or . == "suicide")] | length == 0)
+        ' > /dev/null \
+        || fail "$TITLE - $METHOD returned a phantom SELFDESTRUCT: $RESULT"
+done
+success "$TITLE"
+
 TITLE="Issue #143 - unknown/unavailable blocks must return null instead of panicking"
 UNKNOWN_HASH=0x1111111111111111111111111111111111111111111111111111111111111111
 FUTURE_BLOCK=0x7fffffffff
