@@ -29,7 +29,7 @@ mod assembler;
 pub mod config;
 mod executor;
 mod factory;
-mod patch;
+pub(crate) mod patch;
 pub mod receipt_builder;
 
 pub use executor::apply_precompiles;

@@ -31,21 +31,48 @@ pub(crate) fn patch_mainnet_after_tx(
     is_system_tx: bool,
     changes: &mut HashMap<Address, Account>,
 ) -> Result<(), BlockExecutionError> {
+    if let Some(address) = mainnet_patch_after_tx_address(block_number, tx_index, is_system_tx) {
+        changes.remove(&address);
+    }
+
+    Ok(())
+}
+
+pub(crate) fn mainnet_patch_after_tx_address(
+    block_number: u64,
+    tx_index: u64,
+    is_system_tx: bool,
+) -> Option<Address> {
     if MAINNET_PATCHES_AFTER_TX.is_empty() {
-        return Ok(());
+        return None;
     }
 
     let first = MAINNET_PATCHES_AFTER_TX.first().unwrap().0;
     let last = MAINNET_PATCHES_AFTER_TX.last().unwrap().0;
     if first > block_number || last < block_number {
-        return Ok(());
+        return None;
     }
 
     for (block_num, idx, is_system, address) in MAINNET_PATCHES_AFTER_TX {
         if block_number == *block_num && tx_index == *idx && is_system_tx == *is_system {
-            changes.remove(address);
+            return Some(*address);
         }
     }
 
-    Ok(())
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn selects_phantom_selfdestruct_patch() {
+        assert_eq!(
+            mainnet_patch_after_tx_address(1_514_843, 0, false),
+            Some(address!("0x723e5fbbeed025772a91240fd0956a866a41a603"))
+        );
+        assert_eq!(mainnet_patch_after_tx_address(1_514_843, 1, false), None);
+        assert_eq!(mainnet_patch_after_tx_address(1_514_843, 0, true), None);
+    }
 }

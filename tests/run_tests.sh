@@ -90,6 +90,114 @@ echo "$TRACE_RESULT" | jq -e \
     ' > /dev/null \
     && success "$TITLE" || fail "$TITLE - trace_block missing expected tx hashes"
 
+TITLE="Issue #145 - SELFDESTRUCT trace must match canonical state"
+SELFDESTRUCT_TX=0xf6267312b72427da6b27d3b8e6dd7e30cd5b434ab591f0f9acf6832541ed3fc2
+SELFDESTRUCT_BLOCK=0x171d5b
+SELFDESTRUCT_BLOCK_HASH=0x5fc65d154c09c559cc58f160f482a1ece3df25ba8254dfe9f6c2acabd389a481
+SELFDESTRUCT_SOURCE=0x723e5fbbeed025772a91240fd0956a866a41a603
+SELFDESTRUCT_TARGET=0x9eaf2a89b61eeac97f491f81df0860d3fca6ffde
+CALL_TRACE=$(curl -sS -H 'content-type: application/json' \
+    -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"debug_traceTransaction\",\"params\":[\"$SELFDESTRUCT_TX\",{\"tracer\":\"callTracer\"}]}" \
+    "$TRACE_RPC_URL")
+echo "$CALL_TRACE" | jq -e \
+    --arg source "$SELFDESTRUCT_SOURCE" --arg target "$SELFDESTRUCT_TARGET" \
+    '(.error | not) and
+    ([.result | .. | objects | select(.type? == "SELFDESTRUCT")] |
+        length == 1 and .[0].from == $source and .[0].to == $target and .[0].value == "0x1")' \
+    > /dev/null || fail "$TITLE - callTracer returned $CALL_TRACE"
+
+FLAT_TRACE=$(curl -sS -H 'content-type: application/json' \
+    -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"debug_traceTransaction\",\"params\":[\"$SELFDESTRUCT_TX\",{\"tracer\":\"flatCallTracer\"}]}" \
+    "$TRACE_RPC_URL")
+echo "$FLAT_TRACE" | jq -e \
+    --arg source "$SELFDESTRUCT_SOURCE" --arg target "$SELFDESTRUCT_TARGET" \
+    '(.error | not) and
+    ([.result[]? | select(.type == "suicide")] | length == 1) and
+    ([.result[]? | select(.type == "suicide")][0].action ==
+        {"address":$source,"balance":"0x1","refundAddress":$target})' \
+    > /dev/null || fail "$TITLE - flatCallTracer returned $FLAT_TRACE"
+
+MUX_TRACE=$(curl -sS -H 'content-type: application/json' \
+    -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"debug_traceTransaction\",\"params\":[\"$SELFDESTRUCT_TX\",{\"tracer\":\"muxTracer\",\"tracerConfig\":{\"callTracer\":{},\"flatCallTracer\":{}}}]}" \
+    "$TRACE_RPC_URL")
+echo "$MUX_TRACE" | jq -e \
+    --arg source "$SELFDESTRUCT_SOURCE" --arg target "$SELFDESTRUCT_TARGET" \
+    '(.error | not) and
+    ([.result.callTracer | .. | objects | select(.type? == "SELFDESTRUCT")] |
+        length == 1 and .[0].from == $source and .[0].to == $target and .[0].value == "0x1") and
+    ([.result.flatCallTracer[]? | select(.type == "suicide")] |
+        length == 1 and .[0].action == {"address":$source,"balance":"0x1","refundAddress":$target})' \
+    > /dev/null || fail "$TITLE - muxTracer returned $MUX_TRACE"
+
+PARITY_TRACE=$(curl -sS -H 'content-type: application/json' \
+    -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"trace_replayTransaction\",\"params\":[\"$SELFDESTRUCT_TX\",[\"trace\",\"stateDiff\"]]}" \
+    "$TRACE_RPC_URL")
+echo "$PARITY_TRACE" | jq -e \
+    --arg source "$SELFDESTRUCT_SOURCE" --arg target "$SELFDESTRUCT_TARGET" \
+    '(.error | not) and
+    ([.result.trace[]? | select(.type == "suicide")] |
+        length == 1 and .[0].action == {"address":$source,"balance":"0x1","refundAddress":$target}) and
+    (.result.stateDiff[$source] == null) and
+    (.result.stateDiff[$target] != null)' \
+    > /dev/null || fail "$TITLE - trace_replayTransaction returned $PARITY_TRACE"
+
+TRANSACTION_TRACE=$(curl -sS -H 'content-type: application/json' \
+    -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"trace_transaction\",\"params\":[\"$SELFDESTRUCT_TX\"]}" \
+    "$TRACE_RPC_URL")
+echo "$TRANSACTION_TRACE" | jq -e \
+    --arg source "$SELFDESTRUCT_SOURCE" --arg target "$SELFDESTRUCT_TARGET" \
+    '(.error | not) and
+    ([.result[]? | select(.type == "suicide")] |
+        length == 1 and .[0].action == {"address":$source,"balance":"0x1","refundAddress":$target})' \
+    > /dev/null || fail "$TITLE - trace_transaction returned $TRANSACTION_TRACE"
+
+BLOCK_TRACE=$(curl -sS -H 'content-type: application/json' \
+    -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"trace_block\",\"params\":[\"$SELFDESTRUCT_BLOCK\"]}" \
+    "$TRACE_RPC_URL")
+echo "$BLOCK_TRACE" | jq -e \
+    --arg tx "$SELFDESTRUCT_TX" --arg source "$SELFDESTRUCT_SOURCE" --arg target "$SELFDESTRUCT_TARGET" \
+    '(.error | not) and
+    ([.result[]? | select(.transactionHash == $tx and .type == "suicide")] |
+        length == 1 and .[0].action == {"address":$source,"balance":"0x1","refundAddress":$target})' \
+    > /dev/null || fail "$TITLE - trace_block returned $BLOCK_TRACE"
+
+REPLAY_BLOCK_TRACE=$(curl -sS -H 'content-type: application/json' \
+    -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"trace_replayBlockTransactions\",\"params\":[\"$SELFDESTRUCT_BLOCK\",[\"trace\",\"stateDiff\"]]}" \
+    "$TRACE_RPC_URL")
+echo "$REPLAY_BLOCK_TRACE" | jq -e \
+    --arg tx "$SELFDESTRUCT_TX" --arg source "$SELFDESTRUCT_SOURCE" --arg target "$SELFDESTRUCT_TARGET" \
+    '(.error | not) and
+    ([.result[]? | select(.transactionHash == $tx)] |
+        length == 1 and
+        ([.[0].trace[]? | select(.type == "suicide")] |
+            length == 1 and .[0].action == {"address":$source,"balance":"0x1","refundAddress":$target}) and
+        .[0].stateDiff[$source] == null and
+        .[0].stateDiff[$target] != null)' \
+    > /dev/null || fail "$TITLE - trace_replayBlockTransactions returned $REPLAY_BLOCK_TRACE"
+
+DEBUG_BLOCK_TRACE=$(curl -sS -H 'content-type: application/json' \
+    -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"debug_traceBlockByNumber\",\"params\":[\"$SELFDESTRUCT_BLOCK\",{\"tracer\":\"callTracer\"}]}" \
+    "$TRACE_RPC_URL")
+echo "$DEBUG_BLOCK_TRACE" | jq -e \
+    --arg tx "$SELFDESTRUCT_TX" --arg source "$SELFDESTRUCT_SOURCE" --arg target "$SELFDESTRUCT_TARGET" \
+    '(.error | not) and
+    ([.result[]? | select(.txHash == $tx).result | .. | objects |
+        select(.type? == "SELFDESTRUCT")] |
+        length == 1 and .[0].from == $source and .[0].to == $target and .[0].value == "0x1")' \
+    > /dev/null || fail "$TITLE - debug_traceBlockByNumber returned $DEBUG_BLOCK_TRACE"
+
+DEBUG_BLOCK_HASH_TRACE=$(curl -sS -H 'content-type: application/json' \
+    -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"debug_traceBlockByHash\",\"params\":[\"$SELFDESTRUCT_BLOCK_HASH\",{\"tracer\":\"callTracer\"}]}" \
+    "$TRACE_RPC_URL")
+echo "$DEBUG_BLOCK_HASH_TRACE" | jq -e \
+    --arg tx "$SELFDESTRUCT_TX" --arg source "$SELFDESTRUCT_SOURCE" --arg target "$SELFDESTRUCT_TARGET" \
+    '(.error | not) and
+    ([.result[]? | select(.txHash == $tx).result | .. | objects |
+        select(.type? == "SELFDESTRUCT")] |
+        length == 1 and .[0].from == $source and .[0].to == $target and .[0].value == "0x1")' \
+    > /dev/null || fail "$TITLE - debug_traceBlockByHash returned $DEBUG_BLOCK_HASH_TRACE"
+success "$TITLE"
+
 TITLE="Issue #143 - unknown/unavailable blocks must return null instead of panicking"
 UNKNOWN_HASH=0x1111111111111111111111111111111111111111111111111111111111111111
 FUTURE_BLOCK=0x7fffffffff

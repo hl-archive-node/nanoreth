@@ -1,9 +1,12 @@
 use crate::{
     HlBlock, HlPrimitives,
     chainspec::HlChainSpec,
-    node::{evm::apply_precompiles, types::HlExtras},
+    node::{
+        evm::{apply_precompiles, patch::mainnet_patch_after_tx_address},
+        types::HlExtras,
+    },
 };
-use alloy_consensus::{BlockHeader, transaction::TxHashRef};
+use alloy_consensus::{BlockHeader, Transaction, transaction::TxHashRef};
 use alloy_eips::BlockId;
 use alloy_evm::{Evm, EvmFactory};
 use alloy_network::Ethereum;
@@ -238,6 +241,19 @@ where
     EthApiError: FromEvmError<N::Evm>,
     Rpc: RpcConvert<Primitives = N::Primitives, Error = EthApiError>,
 {
+    fn apply_post_execution_state(
+        &self,
+        tx_info: &TransactionInfo,
+        state: &mut revm::state::EvmState,
+    ) -> Result<(), Self::Error> {
+        if let (Some(block_number), Some(tx_index)) = (tx_info.block_number, tx_info.index) &&
+            let Some(address) = mainnet_patch_after_tx_address(block_number, tx_index, false)
+        {
+            state.remove(&address);
+        }
+        Ok(())
+    }
+
     fn inspect<DB, I>(
         &self,
         db: DB,
@@ -314,19 +330,16 @@ where
             let block_hash = block.hash();
             let block_number = evm_env.block_env.number.saturating_to();
             let base_fee = evm_env.block_env.basefee;
-            let hl_extras =
-                this.get_hl_extras(evm_env.block_env.number.to::<u64>().into()).map_err(
-                    |err: ProviderError| <EthApiError as From<ProviderError>>::from(err),
-                )?;
+            let hl_extras = this
+                .get_hl_extras(evm_env.block_env.number.to::<u64>().into())
+                .map_err(|err: ProviderError| <EthApiError as From<ProviderError>>::from(err))?;
 
             let state = this.state_at_block_id(state_at.into()).await?;
             let mut db =
                 CacheDB::new(StateProviderDatabase::new(StateProviderTraitObjWrapper(&state)));
 
-            let max_transactions = highest_index.map_or_else(
-                || block.body().transaction_count(),
-                |highest| highest as usize + 1,
-            );
+            let max_transactions = highest_index
+                .map_or_else(|| block.body().transaction_count(), |highest| highest as usize + 1);
 
             let mut idx = 0;
             let mut evm = this.evm_config().evm_factory().create_evm_with_inspector(
@@ -338,7 +351,15 @@ where
             let mut tracer = TxTracer::new(evm);
 
             let results = tracer
-                .try_trace_many(block.transactions_recovered().take(max_transactions), |ctx| {
+                .try_trace_many(block.transactions_recovered().take(max_transactions), move |ctx| {
+                    let address = mainnet_patch_after_tx_address(
+                        block_number,
+                        idx,
+                        (*ctx.tx.inner()).gas_price() == Some(0),
+                    );
+                    if let Some(address) = address {
+                        ctx.state.remove(&address);
+                    }
                     let tx_info = TransactionInfo {
                         hash: Some(*ctx.tx.tx_hash()),
                         index: Some(idx),
