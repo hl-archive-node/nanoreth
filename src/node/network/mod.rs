@@ -257,6 +257,7 @@ where
             pool,
         );
         let local_node_record = handle.local_node_record();
+        let destination_network = handle.clone();
         info!(target: "reth::cli", enode=%local_node_record, "P2P networking initialized");
 
         if let Some(block_source_config) = block_source_config {
@@ -312,7 +313,7 @@ where
 
                 start_pseudo_peer(
                     chain_spec.clone(),
-                    local_node_record.to_string(),
+                    destination_network,
                     block_store,
                     debug_cutoff_height,
                 )
