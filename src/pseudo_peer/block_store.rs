@@ -82,6 +82,9 @@ impl BlockStore {
     fn index_block_inner(idx: &mut LruBiMap<B256, u64>, block: &BlockAndReceipts) {
         let number = block.number();
         idx.insert(block.hash(), number);
+        if number > 0 {
+            idx.insert(block.parent_hash(), number - 1);
+        }
     }
 
     fn cache_block(&self, block: BlockAndReceipts) {
@@ -218,5 +221,23 @@ impl BlockStore {
 
     pub fn polling_interval(&self) -> Duration {
         self.source.polling_interval()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pseudo_peer::sources::test_utils;
+
+    #[test]
+    fn indexing_child_makes_parent_hash_resolvable() {
+        let parent_hash = B256::repeat_byte(7);
+        let child = test_utils::block_with_parent(42, 8, parent_hash);
+        let mut index = LruBiMap::new(4);
+
+        BlockStore::index_block_inner(&mut index, &child);
+
+        assert_eq!(index.get_by_left(&child.hash()), Some(&42));
+        assert_eq!(index.get_by_left(&parent_hash), Some(&41));
     }
 }

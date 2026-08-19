@@ -9,7 +9,7 @@ mod local;
 mod rpc;
 mod s3;
 #[cfg(test)]
-mod test_utils;
+pub(super) mod test_utils;
 mod utils;
 
 // Public exports
