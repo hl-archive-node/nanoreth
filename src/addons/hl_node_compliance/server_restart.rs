@@ -3,10 +3,22 @@
 
 use std::net::SocketAddr;
 
-use reth_rpc_builder::RpcServerHandle;
+use jsonrpsee::server::ServerConfigBuilder;
+use reth_rpc_builder::{RpcServerHandle, config::RethRpcServerConfig};
 use reth_rpc_eth_types::EthSubscriptionIdProvider;
+use reth_rpc_layer::{AuthLayer, JwtAuthValidator, JwtSecret};
 
 use super::layer::HlComplianceLayer;
+
+/// Builds the [`AuthLayer`] that authenticates the regular RPC transports, mirroring
+/// `RpcServerConfig::maybe_jwt_layer`.
+///
+/// Restarting a server to add middleware must not drop the authentication the operator
+/// configured with `--rpc.jwtsecret`; without this the replacement servers would serve every
+/// captured method to anonymous callers.
+fn maybe_jwt_layer(jwt_secret: Option<JwtSecret>) -> Option<AuthLayer<JwtAuthValidator>> {
+    jwt_secret.map(|secret| AuthLayer::new(JwtAuthValidator::new(secret)))
+}
 
 /// Stop reth's default RPC servers and restart them with the HL compliance middleware.
 pub async fn restart_servers(
@@ -58,20 +70,40 @@ pub async fn restart_servers(
         entries
     };
 
+    // Preserve the operator's authentication and connection/payload limits across the restart:
+    // the replacement servers must be configured exactly like the ones reth started.
+    let jwt_secret = rpc.rpc_secret_key();
+    if jwt_secret.is_some() {
+        tracing::debug!(target: "reth::cli", "Reapplying --rpc.jwtsecret to the restarted RPC servers");
+    }
+
     let mut http_ws_handles = Vec::new();
 
     // Restart HTTP/WS servers with compliance middleware
     for (addr, module, cors, compression, http_only, label) in servers {
-        let handle = start_http_server(addr, module, hl_default, cors, compression, http_only).await;
+        let handle = start_http_server(
+            addr,
+            module,
+            hl_default,
+            cors,
+            compression,
+            http_only,
+            jwt_secret,
+            rpc.http_ws_server_builder(),
+        )
+        .await;
         tracing::info!(target: "reth::cli", url=%addr, "HL compliance {label} server started");
         http_ws_handles.push(handle);
     }
 
-    // Restart IPC server (no compliance middleware needed — IPC has no HTTP layer)
+    // Restart IPC server (no compliance middleware needed — IPC has no HTTP layer).
+    // JWT does not apply to IPC (reth does not authenticate it either), but the configured
+    // socket permissions and limits must survive the restart.
     let ipc_handle = if let (Some(path), Some(methods)) = (ipc_endpoint, ipc_methods) {
         let mut module = jsonrpsee::RpcModule::new(());
         module.merge(methods).expect("no conflicts");
-        let ipc_server = reth_ipc::server::Builder::default()
+        let ipc_server = rpc
+            .ipc_server_builder()
             .set_id_provider(EthSubscriptionIdProvider::default())
             .build(path.clone());
         let handle = ipc_server.start(module).await.expect("failed to restart IPC server");
@@ -93,6 +125,7 @@ pub async fn restart_servers(
 /// Build and start a jsonrpsee HTTP/WS server with the HL compliance middleware layer.
 ///
 /// Retries binding up to 10 times with 50ms intervals to handle port release after server stop.
+#[allow(clippy::too_many_arguments)]
 async fn start_http_server(
     addr: SocketAddr,
     module: jsonrpsee::RpcModule<()>,
@@ -100,8 +133,10 @@ async fn start_http_server(
     cors: Option<tower_http::cors::CorsLayer>,
     compression: bool,
     http_only: Option<bool>,
+    jwt_secret: Option<JwtSecret>,
+    server_config: ServerConfigBuilder,
 ) -> jsonrpsee::server::ServerHandle {
-    use jsonrpsee::server::{Server, ServerConfig};
+    use jsonrpsee::server::Server;
 
     let mut last_err = None;
     for attempt in 0..10 {
@@ -109,10 +144,13 @@ async fn start_http_server(
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
 
+        // Layer order mirrors reth: CORS outermost so preflight `OPTIONS` requests — which
+        // carry no `Authorization` header — are answered before authentication runs.
         let mut builder = Server::builder().set_http_middleware(
             tower::ServiceBuilder::new()
-                .layer(HlComplianceLayer::new(hl_default))
                 .option_layer(cors.clone())
+                .option_layer(maybe_jwt_layer(jwt_secret))
+                .layer(HlComplianceLayer::new(hl_default))
                 .option_layer(if compression {
                     Some(reth_rpc_layer::CompressionLayer::new())
                 } else {
@@ -121,7 +159,7 @@ async fn start_http_server(
         );
 
         let mut config =
-            ServerConfig::builder().set_id_provider(EthSubscriptionIdProvider::default());
+            server_config.clone().set_id_provider(EthSubscriptionIdProvider::default());
         config = match http_only {
             Some(true) => config.http_only(),
             Some(false) => config.ws_only(),
