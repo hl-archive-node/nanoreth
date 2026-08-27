@@ -100,7 +100,7 @@ mod tests {
         assert!(changed);
         assert_eq!(refreshed.hash(), new.hash());
         assert_eq!(refreshed.highest_precompile_address, new.highest_precompile_address);
-        assert!(store.get_by_hash(old.hash()).is_err());
+        assert!(store.get_by_hash(old.hash()).await.is_err());
     }
 
     #[tokio::test]
@@ -129,9 +129,9 @@ mod tests {
         let (refreshed, changed) = store.refresh_by_number(40).await.unwrap();
         assert!(changed);
         assert_eq!(refreshed.hash(), new_40.hash());
-        assert!(store.get_by_hash(old_40.hash()).is_err());
-        assert!(store.get_by_hash(old_41.hash()).is_err());
-        assert!(store.get_by_hash(old_42.hash()).is_err());
+        assert!(store.get_by_hash(old_40.hash()).await.is_err());
+        assert!(store.get_by_hash(old_41.hash()).await.is_err());
+        assert!(store.get_by_hash(old_42.hash()).await.is_err());
 
         let fetched_41 = store.get_by_number(41).await.unwrap();
         let fetched_42 = store.get_by_number(42).await.unwrap();

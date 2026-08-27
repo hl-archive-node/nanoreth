@@ -27,6 +27,8 @@ use std::{
 use tokio::{sync::mpsc, task::JoinHandle};
 use tracing::{debug, info, warn};
 
+const BODY_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// A block poller that polls blocks from `BlockStore` and sends them to the `block_tx`
 #[derive(Debug)]
 pub struct BlockPoller {
@@ -123,7 +125,7 @@ impl BlockImport<HlNewBlock> for BlockPoller {
         loop {
             match Pin::new(&mut self.block_rx).poll_recv(_cx) {
                 Poll::Ready(Some((number, block))) => {
-                    if self.block_store.get_by_hash(block.hash()).is_err() {
+                    if !self.block_store.is_cached_canonical_hash(block.hash()) {
                         debug!(number, hash = %block.hash(), "Dropping stale queued block");
                         continue;
                     }
@@ -227,13 +229,26 @@ impl PseudoPeer {
                 let GetBlockBodies(hashes) = request;
                 debug!("GetBlockBodies request: {}", hashes.len());
 
-                let mut blocks = Vec::new();
-                for hash in hashes {
-                    match self.block_store.get_by_hash(hash) {
-                        Ok(block) => blocks.push(block),
-                        Err(e) => warn!("Failed to resolve block hash {hash:?}: {e}"),
+                let requested_hashes = hashes.clone();
+                let recoveries = self.block_store.get_by_hashes(hashes);
+                let results = match tokio::time::timeout(BODY_REQUEST_TIMEOUT, recoveries).await {
+                    Ok(results) => results,
+                    Err(_) => {
+                        warn!("Timed out processing GetBlockBodies request");
+                        Vec::new()
                     }
-                }
+                };
+                let blocks = requested_hashes
+                    .into_iter()
+                    .zip(results)
+                    .filter_map(|(hash, result)| match result {
+                        Ok(block) => Some(block),
+                        Err(e) => {
+                            warn!("Failed to resolve block hash {hash:?}: {e}");
+                            None
+                        }
+                    })
+                    .collect::<Vec<_>>();
 
                 let block_bodies = blocks
                     .into_iter()
