@@ -155,9 +155,9 @@ async fn appended_deep_reorg_replaces_cached_branch() -> eyre::Result<()> {
     let (refreshed, changed) = store.refresh_by_number(40).await?;
     assert!(changed);
     assert_eq!(refreshed.hash(), new_40.hash());
-    assert!(store.get_by_hash(old_40.hash()).is_err());
-    assert!(store.get_by_hash(old_41.hash()).is_err());
-    assert!(store.get_by_hash(old_42.hash()).is_err());
+    assert!(store.get_by_hash(old_40.hash()).await.is_err());
+    assert!(store.get_by_hash(old_41.hash()).await.is_err());
+    assert!(store.get_by_hash(old_42.hash()).await.is_err());
     assert_eq!(store.get_by_number(41).await?.hash(), new_41.hash());
     assert_eq!(store.get_by_number(42).await?.hash(), new_42.hash());
     Ok(())

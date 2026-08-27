@@ -195,7 +195,7 @@ mod tests {
 
         assert!(changed);
         assert_ne!(refreshed.hash(), old_hash);
-        assert!(store.get_by_hash(old_hash).is_err());
+        assert!(store.get_by_hash(old_hash).await.is_err());
         server.abort();
     }
 }
