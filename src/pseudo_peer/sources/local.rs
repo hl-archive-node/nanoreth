@@ -77,3 +77,66 @@ impl BlockSource for LocalBlockSource {
         1000
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pseudo_peer::{BlockStore, sources::test_utils};
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn refresh_replaces_local_block_and_receipts() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = test_utils::block(42, 1);
+        let new = test_utils::block(42, 2);
+        test_utils::write_local(dir.path(), &old);
+        let source = Arc::new(Box::new(LocalBlockSource::new(dir.path())) as Box<dyn BlockSource>);
+        let store = BlockStore::new(source, None, 998);
+
+        assert_eq!(store.get_by_number(42).await.unwrap().hash(), old.hash());
+        test_utils::write_local(dir.path(), &new);
+        let (refreshed, changed) = store.refresh_by_number(42).await.unwrap();
+
+        assert!(changed);
+        assert_eq!(refreshed.hash(), new.hash());
+        assert_eq!(refreshed.highest_precompile_address, new.highest_precompile_address);
+        assert!(store.get_by_hash(old.hash()).is_err());
+    }
+
+    #[tokio::test]
+    async fn refresh_replaces_multi_block_reorg() {
+        let dir = tempfile::tempdir().unwrap();
+        let ancestor = test_utils::block(39, 9);
+        let old_40 = test_utils::block_with_parent(40, 10, ancestor.hash());
+        let old_41 = test_utils::block_with_parent(41, 11, old_40.hash());
+        let old_42 = test_utils::block_with_parent(42, 12, old_41.hash());
+        for block in [&ancestor, &old_40, &old_41, &old_42] {
+            test_utils::write_local(dir.path(), block);
+        }
+        let source = Arc::new(Box::new(LocalBlockSource::new(dir.path())) as Box<dyn BlockSource>);
+        let store = BlockStore::new(source, None, 998);
+        for height in 39..=42 {
+            store.get_by_number(height).await.unwrap();
+        }
+
+        let new_40 = test_utils::block_with_parent(40, 20, ancestor.hash());
+        let new_41 = test_utils::block_with_parent(41, 21, new_40.hash());
+        let new_42 = test_utils::block_with_parent(42, 22, new_41.hash());
+        for block in [&new_40, &new_41, &new_42] {
+            test_utils::write_local(dir.path(), block);
+        }
+
+        let (refreshed, changed) = store.refresh_by_number(40).await.unwrap();
+        assert!(changed);
+        assert_eq!(refreshed.hash(), new_40.hash());
+        assert!(store.get_by_hash(old_40.hash()).is_err());
+        assert!(store.get_by_hash(old_41.hash()).is_err());
+        assert!(store.get_by_hash(old_42.hash()).is_err());
+
+        let fetched_41 = store.get_by_number(41).await.unwrap();
+        let fetched_42 = store.get_by_number(42).await.unwrap();
+        assert_eq!(fetched_41.parent_hash(), new_40.hash());
+        assert_eq!(fetched_42.parent_hash(), new_41.hash());
+        assert_eq!(fetched_42.highest_precompile_address, new_42.highest_precompile_address);
+    }
+}

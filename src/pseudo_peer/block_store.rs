@@ -87,11 +87,10 @@ impl BlockStore {
     fn cache_block(&self, block: BlockAndReceipts) {
         let number = block.number();
         let hash = block.hash();
-        let replaced = self.canonical_hashes.write().insert(number, hash);
-        if let Some(old_hash) = replaced.filter(|old_hash| *old_hash != hash) {
-            self.blocks.write().remove(&old_hash);
-            self.hash_index.write().remove_by_left(&old_hash);
+        if self.canonical_hashes.read().get(&number).is_some_and(|old_hash| *old_hash != hash) {
+            self.invalidate_above(number.saturating_sub(1));
         }
+        self.canonical_hashes.write().insert(number, hash);
         self.blocks.write().insert(hash, block.clone());
         self.index_block(&block);
     }
@@ -138,9 +137,6 @@ impl BlockStore {
         );
         let changed =
             self.canonical_hashes.read().get(&n).is_some_and(|hash| *hash != block.hash());
-        if changed {
-            self.invalidate_above(n.saturating_sub(1));
-        }
         self.cache_block(block.clone());
         Ok((block, changed))
     }

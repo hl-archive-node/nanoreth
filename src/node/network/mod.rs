@@ -1,7 +1,7 @@
 #![allow(clippy::owned_cow)]
 use crate::{
     HlBlock,
-    consensus::HlConsensus,
+    consensus::{FinalizationPolicy, HlConsensus},
     node::{
         HlNode,
         network::block_import::{HlBlockImport, handle::ImportHandle, service::ImportService},
@@ -19,6 +19,7 @@ use reth::{
     builder::{BuilderContext, components::NetworkBuilder},
     transaction_pool::{PoolTransaction, TransactionPool},
 };
+use reth_chainspec::EthChainSpec;
 use reth_discv4::NodeRecord;
 use reth_engine_primitives::ConsensusEngineHandle;
 use reth_eth_wire::{BasicNetworkPrimitives, NewBlock, NewBlockPayload};
@@ -28,7 +29,7 @@ use reth_network_api::PeersInfo;
 use reth_payload_primitives::EngineApiMessageVersion;
 use reth_provider::StageCheckpointReader;
 use reth_stages_types::StageId;
-use reth_storage_api::BlockNumReader;
+use reth_storage_api::{BlockIdReader, BlockNumReader};
 use std::{
     net::{Ipv4Addr, SocketAddr},
     sync::Arc,
@@ -163,7 +164,7 @@ impl HlNetworkBuilder {
     pub fn network_config<Node>(
         self,
         ctx: &BuilderContext<Node>,
-        fcu_trigger_rx: oneshot::Receiver<B256>,
+        fcu_trigger_rx: oneshot::Receiver<ForkchoiceState>,
     ) -> eyre::Result<NetworkConfig<Node::Provider, HlNetworkPrimitives>>
     where
         Node: FullNodeTypes<Types = HlNode>,
@@ -171,7 +172,9 @@ impl HlNetworkBuilder {
         let (to_import, from_network) = mpsc::unbounded_channel();
         let (to_network, import_outcome) = mpsc::unbounded_channel();
         let handle = ImportHandle::new(to_import, import_outcome);
-        let consensus = Arc::new(HlConsensus { provider: ctx.provider().clone() });
+        let finalization_policy = FinalizationPolicy::from_chain_id(ctx.chain_spec().chain().id());
+        let consensus =
+            Arc::new(HlConsensus { provider: ctx.provider().clone(), finalization_policy });
 
         ctx.task_executor().spawn_critical("block import", async move {
             let engine = self
@@ -187,19 +190,11 @@ impl HlNetworkBuilder {
             // update to the engine to trigger the pipeline. This is needed because
             // the pseudo peer's NewBlock announcements via the network layer don't
             // reliably generate forkchoice updates on this post-merge chain.
-            if let Ok(target_hash) = fcu_trigger_rx.await {
-                // Use the target hash as finalized so reth's backfill_sync_target()
-                // sees an unknown finalized hash and triggers the pipeline.
-                // If finalized is set to the current best block (which is already
-                // known), reth concludes "fully synced" and never starts backfill.
-                let state = ForkchoiceState {
-                    head_block_hash: target_hash,
-                    safe_block_hash: target_hash,
-                    finalized_block_hash: target_hash,
-                };
+            if let Ok(state) = fcu_trigger_rx.await {
                 info!(
                     target: "reth::cli",
-                    head = %target_hash,
+                    head = %state.head_block_hash,
+                    finalized = %state.finalized_block_hash,
                     "Sending initial forkchoice update to trigger pipeline"
                 );
                 let _ = engine
@@ -261,21 +256,22 @@ where
         info!(target: "reth::cli", enode=%local_node_record, "P2P networking initialized");
 
         if let Some(block_source_config) = block_source_config {
+            let persisted_finalized = ctx.provider().finalized_block_num_hash()?;
             let next_block_number = ctx
                 .provider()
                 .get_stage_checkpoint(StageId::Finish)?
                 .unwrap_or_default()
-                .block_number +
-                1;
+                .block_number
+                + 1;
 
             // Give the block store a handle to the node's database so it can
             // resolve hash→number directly instead of scanning the block source.
             let provider = ctx.provider().clone();
-            let db_block_number: DbBlockNumberFn = Arc::new(move |hash| {
-                provider.block_number(hash).ok().flatten()
-            });
+            let db_block_number: DbBlockNumberFn =
+                Arc::new(move |hash| provider.block_number(hash).ok().flatten());
 
             let chain_spec = ctx.chain_spec();
+            let finalization_policy = FinalizationPolicy::from_chain_id(chain_spec.chain().id());
             ctx.task_executor().spawn_critical("pseudo peer", async move {
                 let block_store = block_source_config
                     .create_block_store(
@@ -292,14 +288,39 @@ where
                 if let Some(latest) = block_store.find_latest_block_number().await {
                     match block_store.get_by_number(latest).await {
                         Ok(block) => {
-                            let hash = block.hash();
+                            let head_block_hash = block.hash();
+                            let finalized_block_hash = match finalization_policy.finalized_number(
+                                latest,
+                                persisted_finalized.map(|block| block.number),
+                            ) {
+                                Some(finalized_number) if finalized_number == latest => {
+                                    head_block_hash
+                                }
+                                Some(finalized_number)
+                                    if persisted_finalized
+                                        .is_some_and(|block| block.number == finalized_number) =>
+                                {
+                                    persisted_finalized.unwrap().hash
+                                }
+                                Some(finalized_number) => block_store
+                                    .get_by_number(finalized_number)
+                                    .await
+                                    .map(|block| block.hash())
+                                    .unwrap_or_default(),
+                                None => B256::ZERO,
+                            };
+                            let state = ForkchoiceState {
+                                head_block_hash,
+                                safe_block_hash: finalized_block_hash,
+                                finalized_block_hash,
+                            };
                             info!(
                                 target: "reth::cli",
                                 number = %latest,
-                                hash = %hash,
+                                hash = %head_block_hash,
                                 "Sending forkchoice trigger from block source"
                             );
-                            let _ = fcu_trigger_tx.send(hash);
+                            let _ = fcu_trigger_tx.send(state);
                         }
                         Err(e) => {
                             info!(

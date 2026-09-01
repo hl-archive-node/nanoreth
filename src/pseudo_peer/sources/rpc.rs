@@ -115,3 +115,41 @@ impl BlockSource for RpcBlockSource {
         self.polling_interval
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pseudo_peer::{BlockStore, sources::test_utils};
+    use jsonrpsee::{RpcModule, server::ServerBuilder};
+    use parking_lot::RwLock;
+
+    #[tokio::test]
+    async fn refresh_replaces_rpc_block_and_receipts() {
+        let current = Arc::new(RwLock::new(test_utils::block(42, 1)));
+        let server = ServerBuilder::default().build("127.0.0.1:0").await.unwrap();
+        let address = server.local_addr().unwrap();
+        let mut module = RpcModule::new(current.clone());
+        module
+            .register_method("hl_syncGetBlock", |_, current, _| {
+                Ok::<_, jsonrpsee_types::ErrorObjectOwned>(Bytes::from(test_utils::encode(
+                    std::slice::from_ref(&*current.read()),
+                )))
+            })
+            .unwrap();
+        let handle = server.start(module);
+        let source = Arc::new(Box::new(RpcBlockSource::new(
+            format!("http://{address}"),
+            Duration::from_millis(1),
+        )) as Box<dyn BlockSource>);
+        let store = BlockStore::new(source, None, 998);
+
+        let old_hash = store.get_by_number(42).await.unwrap().hash();
+        *current.write() = test_utils::block(42, 2);
+        let (refreshed, changed) = store.refresh_by_number(42).await.unwrap();
+
+        assert!(changed);
+        assert_ne!(refreshed.hash(), old_hash);
+        assert!(store.get_by_hash(old_hash).is_err());
+        handle.stop().unwrap();
+    }
+}

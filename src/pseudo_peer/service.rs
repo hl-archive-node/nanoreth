@@ -120,21 +120,29 @@ impl BlockPoller {
 impl BlockImport<HlNewBlock> for BlockPoller {
     fn poll(&mut self, _cx: &mut Context<'_>) -> Poll<BlockImportEvent<HlNewBlock>> {
         debug!("(receiver) Polling");
-        match Pin::new(&mut self.block_rx).poll_recv(_cx) {
-            Poll::Ready(Some((number, block))) => {
-                debug!("Polled block: {}", number);
-                self.block_store.index_block(&block);
-                let reth_block = block.to_reth_block(self.chain_id);
-                let hash = reth_block.header.hash_slow();
-                let td = U128::from(reth_block.header.difficulty);
-                Poll::Ready(BlockImportEvent::Announcement(BlockValidation::ValidHeader {
-                    block: NewBlockMessage {
-                        block: HlNewBlock(NewBlock { block: reth_block, td }).into(),
-                        hash,
-                    },
-                }))
+        loop {
+            match Pin::new(&mut self.block_rx).poll_recv(_cx) {
+                Poll::Ready(Some((number, block))) => {
+                    if self.block_store.get_by_hash(block.hash()).is_err() {
+                        debug!(number, hash = %block.hash(), "Dropping stale queued block");
+                        continue;
+                    }
+                    debug!("Polled block: {}", number);
+                    self.block_store.index_block(&block);
+                    let reth_block = block.to_reth_block(self.chain_id);
+                    let hash = reth_block.header.hash_slow();
+                    let td = U128::from(reth_block.header.difficulty);
+                    return Poll::Ready(BlockImportEvent::Announcement(
+                        BlockValidation::ValidHeader {
+                            block: NewBlockMessage {
+                                block: HlNewBlock(NewBlock { block: reth_block, td }).into(),
+                                hash,
+                            },
+                        },
+                    ));
+                }
+                Poll::Ready(None) | Poll::Pending => return Poll::Pending,
             }
-            Poll::Ready(None) | Poll::Pending => Poll::Pending,
         }
     }
 
@@ -174,6 +182,10 @@ impl PseudoPeer {
                 debug!(
                     "GetBlockHeaders request: {start_block:?}, {limit:?}, {skip:?}, {direction:?}"
                 );
+                let requested_hash = match start_block {
+                    HashOrNumber::Hash(hash) => Some(hash),
+                    HashOrNumber::Number(_) => None,
+                };
                 let number = match start_block {
                     HashOrNumber::Hash(hash) => match self.block_store.hash_to_number(hash) {
                         Ok(n) => n,
@@ -192,6 +204,13 @@ impl PseudoPeer {
                         self.collect_blocks((number + 1 - limit..number + 1).rev()).await
                     }
                 }?;
+
+                if requested_hash
+                    .is_some_and(|hash| blocks.first().is_none_or(|block| block.hash() != hash))
+                {
+                    let _ = response.send(Ok(BlockHeaders(vec![])));
+                    return Ok(());
+                }
 
                 // collect_blocks auto-indexes hashes via BlockStore
                 let block_headers: Vec<_> = blocks

@@ -113,18 +113,13 @@ impl BlockSource for S3BlockSource {
         heights: Vec<u64>,
     ) -> BoxFuture<'static, eyre::Result<Vec<BlockAndReceipts>>> {
         let concurrency = self.recommended_chunk_size() as usize;
-        let futs: Vec<_> = heights
-            .into_iter()
-            .map(|h| self.collect_block(h))
-            .collect();
+        let futs: Vec<_> = heights.into_iter().map(|h| self.collect_block(h)).collect();
         async move {
             let mut results = Vec::with_capacity(futs.len());
             let mut futs = futs.into_iter();
             loop {
-                let batch: Vec<_> = (&mut futs)
-                    .take(concurrency)
-                    .map(|fut| tokio::spawn(fut))
-                    .collect();
+                let batch: Vec<_> =
+                    (&mut futs).take(concurrency).map(|fut| tokio::spawn(fut)).collect();
                 if batch.is_empty() {
                     break;
                 }
@@ -143,5 +138,64 @@ impl BlockSource for S3BlockSource {
 
     fn polling_interval(&self) -> Duration {
         self.polling_interval
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pseudo_peer::{BlockStore, sources::test_utils};
+    use aws_sdk_s3::config::{Credentials, Region};
+    use parking_lot::RwLock;
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
+
+    #[tokio::test]
+    async fn refresh_replaces_s3_block_and_receipts() {
+        let body = Arc::new(RwLock::new(test_utils::encode(&[test_utils::block(42, 1)])));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let served_body = body.clone();
+        let server = tokio::spawn(async move {
+            loop {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let body = served_body.clone();
+                tokio::spawn(async move {
+                    let mut request = vec![0; 8192];
+                    let _ = stream.read(&mut request).await.unwrap();
+                    let payload = body.read().clone();
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        payload.len()
+                    );
+                    stream.write_all(response.as_bytes()).await.unwrap();
+                    stream.write_all(&payload).await.unwrap();
+                });
+            }
+        });
+        let config = aws_sdk_s3::Config::builder()
+            .behavior_version_latest()
+            .region(Region::new("us-east-1"))
+            .credentials_provider(Credentials::new("test", "test", None, None, "test"))
+            .endpoint_url(format!("http://{address}"))
+            .force_path_style(true)
+            .build();
+        let source = Arc::new(Box::new(S3BlockSource::new(
+            aws_sdk_s3::Client::from_conf(config),
+            "blocks".into(),
+            Duration::from_millis(1),
+        )) as Box<dyn BlockSource>);
+        let store = BlockStore::new(source, None, 998);
+
+        let old_hash = store.get_by_number(42).await.unwrap().hash();
+        *body.write() = test_utils::encode(&[test_utils::block(42, 2)]);
+        let (refreshed, changed) = store.refresh_by_number(42).await.unwrap();
+
+        assert!(changed);
+        assert_ne!(refreshed.hash(), old_hash);
+        assert!(store.get_by_hash(old_hash).is_err());
+        server.abort();
     }
 }

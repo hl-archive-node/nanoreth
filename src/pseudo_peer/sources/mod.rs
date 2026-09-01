@@ -8,6 +8,8 @@ mod hl_node;
 mod local;
 mod rpc;
 mod s3;
+#[cfg(test)]
+mod test_utils;
 mod utils;
 
 // Public exports

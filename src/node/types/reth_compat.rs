@@ -402,9 +402,52 @@ mod tests {
         assert_eq!(round_trip_signer(tx), one);
     }
 
+    #[test]
+    fn from_db_accepts_empty_block() {
+        let restored =
+            crate::node::types::BlockAndReceipts::from_db(HlBlock::default(), vec![]).unwrap();
+
+        assert!(restored.system_txs.is_empty());
+        assert!(restored.receipts.is_empty());
+    }
+
+    #[test]
+    fn from_db_rejects_excessive_system_transaction_count() {
+        let tx = system_tx(HOLDER_A, TOKEN, 1);
+        let (mut block, receipts) = database_round_trip_input(tx);
+        block.header.extras.system_tx_count = 2;
+
+        assert!(crate::node::types::BlockAndReceipts::from_db(block, receipts).is_err());
+    }
+
+    #[test]
+    fn from_db_rejects_missing_receipts_instead_of_dropping_system_transactions() {
+        let tx = system_tx(HOLDER_A, TOKEN, 1);
+        let (block, _) = database_round_trip_input(tx);
+
+        assert!(crate::node::types::BlockAndReceipts::from_db(block, vec![]).is_err());
+    }
+
+    #[test]
+    fn from_db_rejects_extra_receipts() {
+        let tx = system_tx(HOLDER_A, TOKEN, 1);
+        let (block, mut receipts) = database_round_trip_input(tx);
+        receipts.push(receipts[0].clone());
+
+        assert!(crate::node::types::BlockAndReceipts::from_db(block, receipts).is_err());
+    }
+
     /// Full sync round trip (to_reth_block -> from_db -> to_reth_block); returns the re-served
     /// system tx's recovered signer, which must equal the original's.
     fn round_trip_signer(tx: SystemTx) -> Address {
+        let (block, receipts) = database_round_trip_input(tx);
+        let restored = crate::node::types::BlockAndReceipts::from_db(block, receipts).unwrap();
+        assert_eq!(restored.system_txs.len(), 1);
+        let reserved = restored.to_reth_block(TESTNET_CHAIN_ID);
+        reserved.body.inner.transactions[0].recover_signer().unwrap()
+    }
+
+    fn database_round_trip_input(tx: SystemTx) -> (HlBlock, Vec<EthereumReceipt>) {
         let sealed = SealedBlock {
             header: SealedHeader {
                 hash: Default::default(),
@@ -415,9 +458,6 @@ mod tests {
         let receipts = vec![tx.receipt.clone().unwrap().into()];
         let block =
             sealed.to_reth_block(Default::default(), None, vec![tx], vec![], TESTNET_CHAIN_ID);
-        let restored = crate::node::types::BlockAndReceipts::from_db(block, receipts);
-        assert_eq!(restored.system_txs.len(), 1);
-        let reserved = restored.to_reth_block(TESTNET_CHAIN_ID);
-        reserved.body.inner.transactions[0].recover_signer().unwrap()
+        (block, receipts)
     }
 }
