@@ -42,7 +42,7 @@ fn scan_result_from_single_block(block: BlockAndReceipts) -> scan::ScanResult {
         path: PathBuf::from("/nonexistent-block"),
         next_expected_height: height + 1,
         new_blocks: vec![block],
-        new_block_ranges: vec![height..=height],
+        new_block_ranges: std::iter::once(height..=height).collect(),
     }
 }
 
