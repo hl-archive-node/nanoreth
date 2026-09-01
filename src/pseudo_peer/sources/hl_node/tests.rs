@@ -1,7 +1,10 @@
 use super::*;
 use crate::{
     node::types::{ReadPrecompileCalls, reth_compat},
-    pseudo_peer::sources::{LocalBlockSource, hl_node::scan::LocalBlockAndReceipts},
+    pseudo_peer::{
+        BlockStore,
+        sources::{LocalBlockSource, hl_node::scan::LocalBlockAndReceipts, test_utils},
+    },
 };
 use alloy_consensus::{BlockBody, Header};
 use alloy_primitives::{Address, B64, B256, Bloom, Bytes, U256};
@@ -98,6 +101,66 @@ fn setup_temp_dir_and_file() -> eyre::Result<(tempfile::TempDir, std::fs::File)>
         .join(format!("{}", now.hour()));
     std::fs::create_dir_all(path.parent().unwrap())?;
     Ok((temp_dir, std::fs::File::create(path)?))
+}
+
+#[tokio::test]
+async fn appended_deep_reorg_replaces_cached_branch() -> eyre::Result<()> {
+    let (temp_dir, mut file) = setup_temp_dir_and_file()?;
+    let ancestor = test_utils::block(39, 9);
+    let old_40 = test_utils::block_with_parent(40, 10, ancestor.hash());
+    let old_41 = test_utils::block_with_parent(41, 11, old_40.hash());
+    let old_42 = test_utils::block_with_parent(42, 12, old_41.hash());
+    for block in [&ancestor, &old_40, &old_41, &old_42] {
+        writeln!(
+            &mut file,
+            "{}",
+            serde_json::to_string(&LocalBlockAndReceipts(
+                block.number().to_string(),
+                block.clone(),
+            ))?
+        )?;
+    }
+    file.flush()?;
+
+    let fallback: BlockSourceBoxed = Arc::new(Box::new(LocalBlockSource::new("/nonexistent")));
+    let source = HlNodeBlockSource::new(
+        fallback,
+        HlNodeBlockSourceArgs {
+            root: temp_dir.path().to_path_buf(),
+            fallback_threshold: DEFAULT_FALLBACK_THRESHOLD_FOR_TEST,
+        },
+        39,
+    )
+    .await;
+    let store = BlockStore::new(Arc::new(Box::new(source)), None, 998);
+    for height in 39..=42 {
+        store.get_by_number(height).await?;
+    }
+
+    let new_40 = test_utils::block_with_parent(40, 20, ancestor.hash());
+    let new_41 = test_utils::block_with_parent(41, 21, new_40.hash());
+    let new_42 = test_utils::block_with_parent(42, 22, new_41.hash());
+    for block in [&new_40, &new_41, &new_42] {
+        writeln!(
+            &mut file,
+            "{}",
+            serde_json::to_string(&LocalBlockAndReceipts(
+                block.number().to_string(),
+                block.clone(),
+            ))?
+        )?;
+    }
+    file.flush()?;
+
+    let (refreshed, changed) = store.refresh_by_number(40).await?;
+    assert!(changed);
+    assert_eq!(refreshed.hash(), new_40.hash());
+    assert!(store.get_by_hash(old_40.hash()).is_err());
+    assert!(store.get_by_hash(old_41.hash()).is_err());
+    assert!(store.get_by_hash(old_42.hash()).is_err());
+    assert_eq!(store.get_by_number(41).await?.hash(), new_41.hash());
+    assert_eq!(store.get_by_number(42).await?.hash(), new_42.hash());
+    Ok(())
 }
 
 struct BlockSourceHierarchy {
