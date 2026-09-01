@@ -24,6 +24,11 @@ pub trait BlockSource: Send + Sync + std::fmt::Debug + Unpin + 'static {
     /// Retrieves a block at the specified height
     fn collect_block(&self, height: u64) -> BoxFuture<'static, eyre::Result<BlockAndReceipts>>;
 
+    /// Retrieves a block without trusting any source-local content cache.
+    fn refresh_block(&self, height: u64) -> BoxFuture<'static, eyre::Result<BlockAndReceipts>> {
+        self.collect_block(height)
+    }
+
     /// Finds the latest block number available from this source
     fn find_latest_block_number(&self) -> BoxFuture<'static, Option<u64>>;
 

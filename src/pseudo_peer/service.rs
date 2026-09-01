@@ -18,6 +18,7 @@ use reth_network::{
     message::NewBlockMessage,
 };
 use reth_network_peers::PeerId;
+use std::time::{Duration, Instant};
 use std::{
     pin::Pin,
     sync::Arc,
@@ -63,20 +64,50 @@ impl BlockPoller {
         info!("Starting block poller");
 
         let polling_interval = block_store.polling_interval();
+        let mut next_reorg_check = Instant::now();
         let mut next_block_number = block_store
             .find_latest_block_number()
             .await
             .ok_or(eyre::eyre!("Failed to find latest block number"))?;
 
         loop {
-            if let Some(debug_cutoff_height) = debug_cutoff_height &&
-                next_block_number > debug_cutoff_height
+            if let Some(debug_cutoff_height) = debug_cutoff_height
+                && next_block_number > debug_cutoff_height
             {
                 next_block_number = debug_cutoff_height;
             }
 
+            if next_block_number > 0 && Instant::now() >= next_reorg_check {
+                next_reorg_check = Instant::now() + Duration::from_secs(1);
+                let previous = next_block_number - 1;
+                if let Ok((refreshed, changed)) = block_store.refresh_by_number(previous).await {
+                    let expected_parent = if previous > 0 {
+                        block_store.get_by_number(previous - 1).await.ok().map(|block| block.hash())
+                    } else {
+                        None
+                    };
+                    if changed
+                        || expected_parent.is_some_and(|hash| hash != refreshed.parent_hash())
+                    {
+                        block_store.invalidate_above(previous.saturating_sub(1));
+                        next_block_number = previous;
+                        continue;
+                    }
+                }
+            }
+
             match block_store.get_by_number(next_block_number).await {
                 Ok(block) => {
+                    if next_block_number > 0
+                        && block_store
+                            .get_by_number(next_block_number - 1)
+                            .await
+                            .is_ok_and(|parent| parent.hash() != block.parent_hash())
+                    {
+                        block_store.invalidate_above(next_block_number.saturating_sub(2));
+                        next_block_number -= 1;
+                        continue;
+                    }
                     block_tx.send((next_block_number, block)).await?;
                     next_block_number += 1;
                 }
@@ -177,17 +208,15 @@ impl PseudoPeer {
                 let GetBlockBodies(hashes) = request;
                 debug!("GetBlockBodies request: {}", hashes.len());
 
-                let mut numbers = Vec::new();
+                let mut blocks = Vec::new();
                 for hash in hashes {
-                    match self.block_store.hash_to_number(hash) {
-                        Ok(n) => numbers.push(n),
+                    match self.block_store.get_by_hash(hash) {
+                        Ok(block) => blocks.push(block),
                         Err(e) => warn!("Failed to resolve block hash {hash:?}: {e}"),
                     }
                 }
 
-                let block_bodies = self
-                    .collect_blocks(numbers)
-                    .await?
+                let block_bodies = blocks
                     .into_iter()
                     .map(|block| block.to_reth_block(chain_id).body)
                     .collect::<Vec<_>>();

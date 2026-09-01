@@ -5,7 +5,7 @@ use futures::future::BoxFuture;
 use parking_lot::RwLock;
 use reth_network::cache::LruMap;
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     sync::Arc,
     time::Duration,
 };
@@ -25,8 +25,10 @@ const HASH_INDEX_LIMIT: u32 = 1_000_000;
 /// Every block that passes through the store has its hash (and parent hash)
 /// automatically indexed, eliminating scattered cache population.
 pub struct BlockStore {
-    /// Block content cache: number → block
-    blocks: RwLock<LruMap<u64, BlockAndReceipts>>,
+    /// Block content cache keyed by the block's actual identity.
+    blocks: RwLock<LruMap<B256, BlockAndReceipts>>,
+    /// Current source-canonical hash at each cached height.
+    canonical_hashes: RwLock<BTreeMap<u64, B256>>,
     /// Hash index: hash ↔ number (bidirectional)
     hash_index: RwLock<LruBiMap<B256, u64>>,
     /// DB fallback for hash→number (HeaderNumbers table)
@@ -62,6 +64,7 @@ impl BlockStore {
         }
         Self {
             blocks: RwLock::new(LruMap::new(BLOCK_CACHE_LIMIT)),
+            canonical_hashes: RwLock::new(BTreeMap::new()),
             hash_index: RwLock::new(LruBiMap::new(HASH_INDEX_LIMIT)),
             db_block_number,
             source,
@@ -79,42 +82,90 @@ impl BlockStore {
     fn index_block_inner(idx: &mut LruBiMap<B256, u64>, block: &BlockAndReceipts) {
         let number = block.number();
         idx.insert(block.hash(), number);
-        if number > 0 {
-            idx.insert(block.parent_hash(), number - 1);
+    }
+
+    fn cache_block(&self, block: BlockAndReceipts) {
+        let number = block.number();
+        let hash = block.hash();
+        let replaced = self.canonical_hashes.write().insert(number, hash);
+        if let Some(old_hash) = replaced.filter(|old_hash| *old_hash != hash) {
+            self.blocks.write().remove(&old_hash);
+            self.hash_index.write().remove_by_left(&old_hash);
+        }
+        self.blocks.write().insert(hash, block.clone());
+        self.index_block(&block);
+    }
+
+    pub fn invalidate_above(&self, block: u64) {
+        let removed = self.canonical_hashes.write().split_off(&block.saturating_add(1));
+        let mut blocks = self.blocks.write();
+        let mut index = self.hash_index.write();
+        for hash in removed.into_values() {
+            blocks.remove(&hash);
+            index.remove_by_left(&hash);
         }
     }
 
     /// Fetch a single block by number. Auto-indexes and caches.
     pub async fn get_by_number(&self, n: u64) -> eyre::Result<BlockAndReceipts> {
-        if let Some(block) = self.blocks.write().get(&n) {
+        if let Some(hash) = self.canonical_hashes.read().get(&n).copied()
+            && let Some(block) = self.blocks.write().get(&hash)
+        {
             return Ok(block.clone());
         }
         if let Some(block) = self.gap_blocks.get(&n) {
             let block = block.clone();
-            self.blocks.write().insert(n, block.clone());
-            self.index_block(&block);
+            self.cache_block(block.clone());
             return Ok(block);
         }
         let block = self.source.collect_block(n).await?;
-        self.blocks.write().insert(n, block.clone());
-        self.index_block(&block);
+        eyre::ensure!(
+            block.number() == n,
+            "Source returned block {} for requested height {n}",
+            block.number()
+        );
+        self.cache_block(block.clone());
+        Ok(block)
+    }
+
+    /// Bypasses source-local caches and replaces the canonical entry if it changed.
+    pub async fn refresh_by_number(&self, n: u64) -> eyre::Result<(BlockAndReceipts, bool)> {
+        let block = self.source.refresh_block(n).await?;
+        eyre::ensure!(
+            block.number() == n,
+            "Source returned block {} for requested height {n}",
+            block.number()
+        );
+        let changed =
+            self.canonical_hashes.read().get(&n).is_some_and(|hash| *hash != block.hash());
+        if changed {
+            self.invalidate_above(n.saturating_sub(1));
+        }
+        self.cache_block(block.clone());
+        Ok((block, changed))
+    }
+
+    pub fn get_by_hash(&self, hash: B256) -> eyre::Result<BlockAndReceipts> {
+        let block = self
+            .blocks
+            .write()
+            .get(&hash)
+            .cloned()
+            .ok_or_else(|| eyre::eyre!("Block not cached for hash: {hash:?}"))?;
+        eyre::ensure!(block.hash() == hash, "Cached block hash mismatch");
         Ok(block)
     }
 
     /// Fetch multiple blocks by number. Auto-indexes and caches.
-    pub async fn get_by_numbers(
-        &self,
-        heights: Vec<u64>,
-    ) -> eyre::Result<Vec<BlockAndReceipts>> {
+    pub async fn get_by_numbers(&self, heights: Vec<u64>) -> eyre::Result<Vec<BlockAndReceipts>> {
         let mut cached: HashMap<u64, BlockAndReceipts> = HashMap::new();
         let mut uncached_heights = Vec::new();
         {
-            let mut c = self.blocks.write();
             for &h in &heights {
-                if let Some(block) = c.get(&h) {
+                let hash = self.canonical_hashes.read().get(&h).copied();
+                if let Some(block) = hash.and_then(|hash| self.blocks.write().get(&hash).cloned()) {
                     cached.insert(h, block.clone());
                 } else if let Some(block) = self.gap_blocks.get(&h) {
-                    c.insert(h, block.clone());
                     cached.insert(h, block.clone());
                 } else {
                     uncached_heights.push(h);
@@ -123,21 +174,20 @@ impl BlockStore {
         }
 
         if !uncached_heights.is_empty() {
-            let fetched = self.source.collect_blocks(uncached_heights).await?;
-            let mut c = self.blocks.write();
+            let fetched = self.source.collect_blocks(uncached_heights.clone()).await?;
             for block in fetched {
                 let h = block.number();
-                c.insert(h, block.clone());
+                eyre::ensure!(
+                    uncached_heights.contains(&h),
+                    "Source returned unrequested block {h}"
+                );
+                self.cache_block(block.clone());
                 cached.insert(h, block);
             }
         }
 
-        // Batch-index all blocks under a single write lock
-        {
-            let mut idx = self.hash_index.write();
-            for block in cached.values() {
-                Self::index_block_inner(&mut idx, block);
-            }
+        for block in cached.values() {
+            self.cache_block(block.clone());
         }
 
         heights
@@ -156,9 +206,10 @@ impl BlockStore {
 
         // Fallback: database lookup (MDBX is mmap'd, no need to re-cache)
         if let Some(ref db_fn) = self.db_block_number
-            && let Some(n) = db_fn(hash) {
-                return Ok(n);
-            }
+            && let Some(n) = db_fn(hash)
+        {
+            return Ok(n);
+        }
 
         Err(eyre::eyre!("Hash not found in index or database: {hash:?}"))
     }
