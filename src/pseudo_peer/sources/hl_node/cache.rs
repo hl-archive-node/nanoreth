@@ -30,6 +30,10 @@ impl LocalBlocksCache {
         self.cache.get(&height).cloned()
     }
 
+    pub fn remove_block(&mut self, height: u64) {
+        self.cache.remove(&height);
+    }
+
     pub fn get_path_for_height(&self, height: u64) -> Option<PathBuf> {
         self.ranges.get(&height).cloned()
     }
