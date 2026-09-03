@@ -8,12 +8,13 @@ use crate::{
 };
 use alloy_eips::HashOrNumber;
 use alloy_primitives::U128;
+use alloy_rlp::Encodable;
 use rayon::prelude::*;
 use reth_eth_wire::{
     BlockBodies, BlockHeaders, GetBlockBodies, GetBlockHeaders, HeadersDirection, NewBlock,
 };
 use reth_network::{
-    eth_requests::IncomingEthRequest,
+    eth_requests::{IncomingEthRequest, MAX_HEADERS_SERVE, SOFT_RESPONSE_LIMIT},
     import::{BlockImport, BlockImportEvent, BlockValidation, NewBlockEvent},
     message::NewBlockMessage,
 };
@@ -200,12 +201,18 @@ impl PseudoPeer {
                     HashOrNumber::Number(number) => number,
                 };
 
-                let blocks = match direction {
-                    HeadersDirection::Rising => self.collect_blocks(number..number + limit).await,
-                    HeadersDirection::Falling => {
-                        self.collect_blocks((number + 1 - limit..number + 1).rev()).await
-                    }
-                }?;
+                let step = skip as u64 + 1;
+                let mut next_number = Some(number);
+                let mut block_numbers = Vec::with_capacity((limit as usize).min(MAX_HEADERS_SERVE));
+                for _ in 0..limit.min(MAX_HEADERS_SERVE as u64) {
+                    let Some(block_number) = next_number else { break };
+                    block_numbers.push(block_number);
+                    next_number = match direction {
+                        HeadersDirection::Rising => block_number.checked_add(step),
+                        HeadersDirection::Falling => block_number.checked_sub(step),
+                    };
+                }
+                let blocks = self.collect_blocks(block_numbers).await?;
 
                 if requested_hash
                     .is_some_and(|hash| blocks.first().is_none_or(|block| block.hash() != hash))
@@ -215,13 +222,23 @@ impl PseudoPeer {
                 }
 
                 // collect_blocks auto-indexes hashes via BlockStore
-                let block_headers: Vec<_> = blocks
+                let encoded_headers: Vec<_> = blocks
                     .into_par_iter()
                     .map(|block| {
                         let reth_block = block.to_reth_block(chain_id);
                         reth_block.header.clone()
                     })
                     .collect();
+
+                let mut total_bytes = 0;
+                let mut block_headers = Vec::with_capacity(encoded_headers.len());
+                for header in encoded_headers {
+                    total_bytes += header.length();
+                    block_headers.push(header);
+                    if total_bytes > SOFT_RESPONSE_LIMIT {
+                        break;
+                    }
+                }
 
                 let _ = response.send(Ok(BlockHeaders(block_headers)));
             }
