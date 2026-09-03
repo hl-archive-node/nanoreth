@@ -109,6 +109,7 @@ futures = "0.3"
 lazy_static = "1.4.0"
 once_cell = { version = "1.19", default-features = false, features = ["critical-section"] }
 parking_lot = "0.12"
+revm-inspectors = "0.30.0"
 serde = { version = "1.0", features = ["derive"], default-features = false }
 serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
 thiserror = { version = "2.0.0", default-features = false }

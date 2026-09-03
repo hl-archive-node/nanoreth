@@ -1,4 +1,7 @@
-use super::{config::HlBlockExecutionCtx, patch::patch_mainnet_after_tx};
+use super::{
+    config::HlBlockExecutionCtx, patch::patch_mainnet_after_tx,
+    read_precompile_forwarder::ReadPrecompileForwarder,
+};
 use crate::{
     evm::transaction::HlTxEnv,
     hardforks::HlHardforks,
@@ -10,7 +13,7 @@ use crate::{
 use alloy_consensus::{Transaction, TxReceipt};
 use alloy_eips::{Encodable2718, eip7685::Requests};
 use alloy_evm::{block::ExecutableTx, eth::receipt_builder::ReceiptBuilderCtx};
-use alloy_primitives::{Address, Bytes, U160, U256, address, hex};
+use alloy_primitives::{Address, B256, Bytes, U160, U256, address, hex};
 use reth_chainspec::{EthChainSpec, EthereumHardforks, Hardforks};
 use reth_evm::{
     Database, Evm, FromRecoveredTx, FromTxWithEncoded, IntoTxEnv, OnStateHook,
@@ -29,6 +32,9 @@ use revm::{
     primitives::HashMap,
     state::Bytecode,
 };
+use std::sync::Arc;
+
+pub type ScopedReadPrecompileForwarder = (Arc<ReadPrecompileForwarder>, B256);
 
 pub fn is_system_transaction(tx: &TransactionSigned) -> bool {
     let Some(gas_price) = tx.gas_price() else {
@@ -57,17 +63,17 @@ where
     ctx: HlBlockExecutionCtx<'a>,
 }
 
+/// Replays a read precompile call from the calls recorded in the block body, or returns [`None`]
+/// if the block did not record this exact input.
 fn run_precompile(
     precompile_calls: &HashMap<ReadPrecompileInput, ReadPrecompileResult>,
     data: &[u8],
     gas_limit: u64,
-) -> PrecompileResult {
+) -> Option<PrecompileResult> {
     let input = ReadPrecompileInput { input: Bytes::copy_from_slice(data), gas_limit };
-    let Some(get) = precompile_calls.get(&input) else {
-        return Err(PrecompileError::OutOfGas);
-    };
+    let get = precompile_calls.get(&input)?;
 
-    match *get {
+    Some(match *get {
         ReadPrecompileResult::Ok { gas_used, ref bytes } => {
             Ok(PrecompileOutput { gas_used, bytes: bytes.clone(), reverted: false })
         }
@@ -77,6 +83,25 @@ fn run_precompile(
         }
         ReadPrecompileResult::Error => Err(PrecompileError::OutOfGas),
         ReadPrecompileResult::UnexpectedError => panic!("unexpected precompile error"),
+    })
+}
+
+/// Answers a read precompile call that the block did not record.
+///
+/// Without a forwarder there is nothing to answer with, so the call burns its gas limit — which
+/// is the historical behaviour for any unrecorded input.
+fn run_unrecorded_precompile(
+    forwarder: Option<&ScopedReadPrecompileForwarder>,
+    address: Address,
+    data: &[u8],
+    gas_limit: u64,
+    block_number: u64,
+) -> PrecompileResult {
+    match forwarder {
+        Some((forwarder, head_hash)) => {
+            forwarder.call(address, data, gas_limit, block_number, *head_hash)
+        }
+        None => Err(PrecompileError::OutOfGas),
     }
 }
 
@@ -99,7 +124,7 @@ where
 {
     /// Creates a new HlBlockExecutor.
     pub fn new(mut evm: EVM, ctx: HlBlockExecutionCtx<'a>, spec: Spec, receipt_builder: R) -> Self {
-        apply_precompiles(&mut evm, &ctx.extras);
+        apply_precompiles_with_forwarder(&mut evm, &ctx.extras, ctx.read_precompile_forwarder());
         Self { spec, evm, gas_used: 0, receipts: vec![], receipt_builder, ctx }
     }
 
@@ -154,7 +179,11 @@ where
     type Evm = E;
 
     fn apply_pre_execution_changes(&mut self) -> Result<(), BlockExecutionError> {
-        apply_precompiles(&mut self.evm, &self.ctx.extras);
+        apply_precompiles_with_forwarder(
+            &mut self.evm,
+            &self.ctx.extras,
+            self.ctx.read_precompile_forwarder(),
+        );
         self.deploy_corewriter_contract()?;
 
         Ok(())
@@ -246,6 +275,22 @@ pub fn apply_precompiles<EVM>(evm: &mut EVM, extras: &HlExtras)
 where
     EVM: Evm<Precompiles = PrecompilesMap>,
 {
+    apply_precompiles_with_forwarder(evm, extras, None)
+}
+
+/// Same as [`apply_precompiles`], but resolves read precompile inputs that the block did not
+/// record through `forwarder` instead of burning their gas limit.
+///
+/// Only the RPC call paths pass a forwarder, and only for the chain head. Block execution must
+/// never forward: the recorded calls are consensus data, and an unrecorded input there means the
+/// block itself is wrong.
+pub fn apply_precompiles_with_forwarder<EVM>(
+    evm: &mut EVM,
+    extras: &HlExtras,
+    forwarder: Option<ScopedReadPrecompileForwarder>,
+) where
+    EVM: Evm<Precompiles = PrecompilesMap>,
+{
     let block_number = evm.block().number;
     let precompiles_mut = evm.precompiles_mut();
     // For all precompile addresses just in case it's populated and not cleared
@@ -258,11 +303,21 @@ where
     }
     for (address, precompile) in extras.read_precompile_calls.clone().unwrap_or_default().0.iter() {
         let precompile = precompile.clone();
-        precompiles_mut.apply_precompile(address, |_| {
+        let forwarder = forwarder.clone();
+        let address = *address;
+        precompiles_mut.apply_precompile(&address, |_| {
             let precompiles_map: HashMap<ReadPrecompileInput, ReadPrecompileResult> =
                 precompile.iter().map(|(input, result)| (input.clone(), result.clone())).collect();
             Some(DynPrecompile::from(move |input: PrecompileInput| -> PrecompileResult {
-                run_precompile(&precompiles_map, input.data, input.gas)
+                run_precompile(&precompiles_map, input.data, input.gas).unwrap_or_else(|| {
+                    run_unrecorded_precompile(
+                        forwarder.as_ref(),
+                        address,
+                        input.data,
+                        input.gas,
+                        block_number.saturating_to(),
+                    )
+                })
             }))
         });
     }
@@ -270,7 +325,7 @@ where
     // NOTE: This is adapted from hyperliquid-dex/hyper-evm-sync#5
     const WARM_PRECOMPILES_BLOCK_NUMBER: u64 = 8_197_684;
     if block_number >= U256::from(WARM_PRECOMPILES_BLOCK_NUMBER) {
-        fill_all_precompiles(extras, precompiles_mut);
+        fill_all_precompiles(extras, precompiles_mut, forwarder, block_number.saturating_to());
     }
 }
 
@@ -278,18 +333,30 @@ fn address_to_u64(address: Address) -> u64 {
     address.into_u256().try_into().unwrap()
 }
 
-fn fill_all_precompiles(extras: &HlExtras, precompiles_mut: &mut PrecompilesMap) {
+fn fill_all_precompiles(
+    extras: &HlExtras,
+    precompiles_mut: &mut PrecompilesMap,
+    forwarder: Option<ScopedReadPrecompileForwarder>,
+    block_number: u64,
+) {
     let lowest_address = 0x800;
     let highest_address = extras.highest_precompile_address.map_or(0x80D, address_to_u64);
     for address in lowest_address..=highest_address {
         let address = Address::from(U160::from(address));
+        let forwarder = forwarder.clone();
         precompiles_mut.apply_precompile(&address, |f| {
             if let Some(precompile) = f {
                 return Some(precompile);
             }
 
-            Some(DynPrecompile::from(move |_: PrecompileInput| -> PrecompileResult {
-                Err(PrecompileError::OutOfGas)
+            Some(DynPrecompile::from(move |input: PrecompileInput| -> PrecompileResult {
+                run_unrecorded_precompile(
+                    forwarder.as_ref(),
+                    address,
+                    input.data,
+                    input.gas,
+                    block_number,
+                )
             }))
         });
     }

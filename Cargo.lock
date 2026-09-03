@@ -9419,6 +9419,7 @@ dependencies = [
  "reth-trie-common",
  "reth-trie-db",
  "revm",
+ "revm-inspectors",
  "rmp-serde",
  "serde",
  "serde_json",

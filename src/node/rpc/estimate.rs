@@ -1,4 +1,4 @@
-use super::{HlEthApi, HlRpcNodeCore, apply_precompiles};
+use super::{HlEthApi, HlRpcNodeCore, apply_precompiles_with_forwarder};
 use alloy_evm::overrides::{StateOverrideError, apply_state_overrides};
 use alloy_network::TransactionBuilder;
 use alloy_primitives::{TxKind, U256};
@@ -97,10 +97,10 @@ where
         tx_env.set_gas_limit(tx_env.gas_limit().min(highest_gas_limit));
 
         let block_number = evm_env.block_env().number;
-        let hl_extras = self.get_hl_extras(block_number.to::<u64>().into())?;
+        let (hl_extras, forwarder) = self.hl_call_precompiles(block_number.to())?;
 
         let mut evm = self.evm_config().evm_with_env(&mut db, evm_env);
-        apply_precompiles(&mut evm, &hl_extras);
+        apply_precompiles_with_forwarder(&mut evm, &hl_extras, forwarder);
 
         if is_basic_transfer {
             let mut min_tx_env = tx_env.clone();

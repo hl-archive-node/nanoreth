@@ -111,6 +111,36 @@ reth-hl node --http --http.api eth,ots,net,web3 \
 
 The `--rpc.polling-interval` flag controls how often the local node polls for new blocks (default: 100ms).
 
+## Read precompiles on the latest block
+
+Blocks only carry the read precompile calls their own transactions made, so `eth_call`,
+`eth_estimateGas` and `debug_traceCall` against `latest` fail with out-of-gas as soon as they
+touch HyperCore state that no transaction has read yet — which wallets routinely do when
+estimating gas.
+
+`--forward-read-precompiles` fixes this without giving up local execution: the call still runs in
+nanoreth's EVM, and only the unrecorded read precompile inputs are resolved through an hl-node.
+State overrides, block overrides and tracing therefore keep working, unlike `--forward-call`,
+which hands the whole call to the upstream RPC.
+
+```sh
+# hl-node serving its EVM RPC on the default port
+$ hl-node run-non-validator --replica-cmds-style recent-actions --serve-eth-rpc --disable-output-file-buffering
+
+$ reth-hl node --http --http.api eth,ots,net,web3,debug --local \
+    --forward-read-precompiles --read-precompile-rpc-url http://localhost:3001/evm
+```
+
+`--read-precompile-rpc-url` defaults to `--upstream-rpc-url` (Hyperliquid's public RPC), but
+pointing it at a local hl-node avoids that endpoint's rate limits.
+`--read-precompile-rpc-rate-limit <requests-per-second>` optionally paces forwarded requests;
+identical concurrent reads are coalesced before the limit is applied. Configure it according to
+the selected upstream, or use a local hl-node for production traffic. Official public RPC URLs
+default to 5 requests/s, while custom URLs are unlimited unless this option is set.
+
+Only the chain head forwards. Historical blocks replay from their recorded calls, because
+HyperCore state is not archived and forwarding an old call would answer it with today's values.
+
 ## Architecture: How nanoreth differs from reth
 
 Nanoreth replaces reth's native P2P sync pipeline with a **pseudo peer + block source** architecture:
