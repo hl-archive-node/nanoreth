@@ -1,3 +1,4 @@
+use super::ScopedReadPrecompileForwarder;
 use super::{executor::HlBlockExecutor, factory::HlEvmFactory};
 use crate::{
     HlBlock, HlBlockBody, HlHeader, HlPrimitives,
@@ -236,6 +237,25 @@ impl<R, Spec, EvmFactory> HlBlockExecutorFactory<R, Spec, EvmFactory> {
 pub struct HlBlockExecutionCtx<'a> {
     ctx: EthBlockExecutionCtx<'a>,
     pub extras: HlExtras,
+    /// Resolves read precompile inputs that `extras` did not record.
+    ///
+    /// Only the RPC simulation path sets this, and only for blocks that were never mined.
+    /// Executing a real block must leave it `None`: there the recorded calls are consensus data,
+    /// and an input missing from them means the block itself is wrong.
+    read_precompile_forwarder: Option<ScopedReadPrecompileForwarder>,
+}
+
+impl HlBlockExecutionCtx<'_> {
+    pub(crate) fn enable_rpc_read_precompile_forwarding(
+        &mut self,
+        forwarder: Option<ScopedReadPrecompileForwarder>,
+    ) {
+        self.read_precompile_forwarder = forwarder;
+    }
+
+    pub(super) fn read_precompile_forwarder(&self) -> Option<ScopedReadPrecompileForwarder> {
+        self.read_precompile_forwarder.clone()
+    }
 }
 
 impl<R, Spec, EvmF> BlockExecutorFactory for HlBlockExecutorFactory<R, Spec, EvmF>
@@ -394,6 +414,7 @@ where
                 read_precompile_calls: block_body.read_precompile_calls.clone(),
                 highest_precompile_address: block_body.highest_precompile_address,
             },
+            read_precompile_forwarder: None,
         })
     }
 
@@ -409,7 +430,11 @@ where
                 ommers: &[],
                 withdrawals: attributes.withdrawals.map(Cow::Owned),
             },
-            extras: HlExtras::default(), // TODO: hacky, double check if this is correct
+            // A block that has not been mined has no recorded calls of its own. The RPC
+            // simulation path overwrites this with the head's precompile address range and a
+            // forwarder; see `HlEthApi::simulate_v1`.
+            extras: HlExtras::default(),
+            read_precompile_forwarder: None,
         })
     }
 }
@@ -432,6 +457,7 @@ impl ConfigureEngineEvm<HlExecutionData> for HlEvmConfig {
                 read_precompile_calls: block.body.read_precompile_calls.clone(),
                 highest_precompile_address: block.body.highest_precompile_address,
             },
+            read_precompile_forwarder: None,
         }
     }
 

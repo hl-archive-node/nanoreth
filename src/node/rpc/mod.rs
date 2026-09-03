@@ -1,11 +1,18 @@
 use crate::{
     HlBlock, HlPrimitives,
     chainspec::HlChainSpec,
-    node::{evm::apply_precompiles, types::HlExtras},
+    evm::transaction::HlTxEnvExt,
+    node::{
+        evm::{
+            ScopedReadPrecompileForwarder, apply_precompiles, apply_precompiles_with_forwarder,
+            read_precompile_forwarder::read_precompile_forwarder,
+        },
+        types::HlExtras,
+    },
 };
 use alloy_consensus::{BlockHeader, transaction::TxHashRef};
 use alloy_eips::BlockId;
-use alloy_evm::{Evm, EvmFactory};
+use alloy_evm::{Evm, EvmFactory, block::BlockExecutorFactory};
 use alloy_network::Ethereum;
 use alloy_primitives::U256;
 use alloy_rpc_types_eth::TransactionInfo;
@@ -47,15 +54,16 @@ use reth_rpc_eth_api::{
     },
 };
 use reth_rpc_eth_types::cache::db::{StateCacheDbRefMutWrapper, StateProviderTraitObjWrapper};
-use reth_storage_api::ProviderBlock;
+use reth_storage_api::{BlockNumReader, ProviderBlock};
 use revm::{DatabaseCommit, context::result::ResultAndState};
-use std::{fmt, marker::PhantomData, sync::Arc};
+use std::{cmp::Ordering, fmt, marker::PhantomData, sync::Arc};
 
 mod block;
 mod call;
 pub mod engine_api;
 mod estimate;
 pub mod precompile;
+mod simulate;
 mod transaction;
 
 pub trait HlRpcNodeCore: RpcNodeCore<Primitives: NodePrimitives<Block = HlBlock>> {}
@@ -234,7 +242,11 @@ where
 
 impl<N, Rpc> Trace for HlEthApi<N, Rpc>
 where
-    N: HlRpcNodeCore,
+    N: HlRpcNodeCore<
+        Evm: ConfigureEvm<
+            BlockExecutorFactory: BlockExecutorFactory<EvmFactory: EvmFactory<Tx: HlTxEnvExt>>,
+        >,
+    >,
     EthApiError: FromEvmError<N::Evm>,
     Rpc: RpcConvert<Primitives = N::Primitives, Error = EthApiError>,
 {
@@ -249,11 +261,12 @@ where
         DB: Database<Error = ProviderError>,
         I: InspectorFor<Self::Evm, DB>,
     {
-        let block_number = evm_env.block_env().number;
-        let hl_extras = self.get_hl_extras(block_number.to::<u64>().into())?;
+        let block_number =
+            tx_env.rpc_state_block_number().unwrap_or(evm_env.block_env().number.to());
+        let (hl_extras, forwarder) = self.hl_call_precompiles(block_number)?;
 
         let mut evm = self.evm_config().evm_with_env_and_inspector(db, evm_env, inspector);
-        apply_precompiles(&mut evm, &hl_extras);
+        apply_precompiles_with_forwarder(&mut evm, &hl_extras, forwarder);
         evm.transact(tx_env).map_err(Self::Error::from_evm_err)
     }
 
@@ -372,6 +385,76 @@ where
                 highest_precompile_address: block.body.highest_precompile_address,
             })
             .unwrap_or_default())
+    }
+
+    /// Read precompile data to run a call at `block_number` with.
+    ///
+    /// Alongside the block's recorded calls this returns the forwarder to resolve unrecorded
+    /// inputs with, but only from the chain head onwards: HyperCore state is not archived, so
+    /// forwarding a historical call would answer it with today's values.
+    fn hl_call_precompiles(
+        &self,
+        block_number: u64,
+    ) -> Result<(HlExtras, Option<ScopedReadPrecompileForwarder>), ProviderError> {
+        let Some(forwarder) = read_precompile_forwarder() else {
+            return Ok((self.get_hl_extras(block_number.into())?, None));
+        };
+
+        let chain_info = self.provider().chain_info()?;
+        let best_block_number = chain_info.best_number;
+        let forwarder = Some((forwarder, chain_info.best_hash));
+
+        match block_number.cmp(&best_block_number) {
+            Ordering::Less => Ok((self.get_hl_extras(block_number.into())?, None)),
+            Ordering::Equal => Ok((self.get_hl_extras(block_number.into())?, forwarder)),
+            // A block that has not been mined has no body to take the precompile address range
+            // from, so borrow the head's. Without this the range falls back to `0x800..=0x80d`
+            // and everything above it — `bbo` and up — is left uninstalled, so reading one looks
+            // like a call to a plain account rather than a precompile.
+            //
+            // Its recorded calls are left out: those belong to the head block's own transactions,
+            // and the forwarder answers the same inputs anyway.
+            Ordering::Greater => {
+                let head = self.get_hl_extras(best_block_number.into())?;
+                Ok((
+                    HlExtras {
+                        read_precompile_calls: None,
+                        highest_precompile_address: head.highest_precompile_address,
+                    },
+                    forwarder,
+                ))
+            }
+        }
+    }
+
+    /// Read precompile data for blocks simulated on top of `parent_block_number`.
+    ///
+    /// A simulated block has no canonical body, so it must never borrow recorded calls from the
+    /// canonical block at the same height. It only inherits the parent's precompile address range.
+    /// Forwarding is available when the simulation starts at the head, where the upstream's
+    /// `latest` HyperCore state matches the local state being simulated.
+    fn hl_simulation_precompiles(
+        &self,
+        parent_block_number: u64,
+    ) -> Result<(HlExtras, Option<ScopedReadPrecompileForwarder>), ProviderError> {
+        let Some(forwarder) = read_precompile_forwarder() else {
+            return Ok((HlExtras::default(), None));
+        };
+
+        let chain_info = self.provider().chain_info()?;
+        let best_block_number = chain_info.best_number;
+        let extras_block_number = parent_block_number.min(best_block_number);
+        let parent = self.get_hl_extras(extras_block_number.into())?;
+        let forwarder =
+            (parent_block_number >= best_block_number).then_some((forwarder, chain_info.best_hash));
+
+        Ok((
+            HlExtras {
+                read_precompile_calls: None,
+                highest_precompile_address: parent.highest_precompile_address,
+            },
+            forwarder,
+        ))
     }
 }
 

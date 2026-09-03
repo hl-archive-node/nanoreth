@@ -22,6 +22,7 @@ use reth_db::{DatabaseEnv, init_db, mdbx::init_db_for};
 use reth_tracing::FileWorkerGuard;
 use std::{
     fmt::{self},
+    num::NonZeroU32,
     sync::Arc,
 };
 use tracing::info;
@@ -72,6 +73,33 @@ pub struct HlNodeArgs {
     /// This is useful when read precompile is needed for gas estimation.
     #[arg(long, env = "FORWARD_CALL")]
     pub forward_call: bool,
+
+    /// Resolve read precompile calls at the chain head through an hl-node.
+    ///
+    /// Blocks only record the read precompile calls their own transactions made, so a call
+    /// against the head that reads HyperCore state nanoreth has never seen fails with
+    /// out-of-gas. With this enabled, eth_call, eth_estimateGas and debug_traceCall still run
+    /// locally, but any unrecorded read precompile input is answered by the node at
+    /// --read-precompile-rpc-url.
+    ///
+    /// Unlike --forward-call this keeps execution local, so state overrides and tracing keep
+    /// working. Historical blocks are unaffected: they replay from their recorded calls.
+    #[arg(long, env = "FORWARD_READ_PRECOMPILES")]
+    pub forward_read_precompiles: bool,
+
+    /// RPC URL used to resolve forwarded read precompile calls.
+    ///
+    /// Defaults to --upstream-rpc-url. Point it at a local hl-node (for example
+    /// http://localhost:3001/evm) to avoid the public RPC's rate limits.
+    #[arg(long, env = "READ_PRECOMPILE_RPC_URL")]
+    pub read_precompile_rpc_url: Option<String>,
+
+    /// Maximum forwarded read precompile requests per second.
+    ///
+    /// Defaults to 5 for an official public RPC and unlimited for a custom URL. Identical
+    /// concurrent requests are coalesced before this limit is applied.
+    #[arg(long, env = "READ_PRECOMPILE_RPC_RATE_LIMIT")]
+    pub read_precompile_rpc_rate_limit: Option<NonZeroU32>,
 
     /// Experimental: enables the eth_getProof RPC method.
     ///

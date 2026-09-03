@@ -30,9 +30,12 @@ pub mod config;
 mod executor;
 mod factory;
 mod patch;
+pub mod read_precompile_forwarder;
 pub mod receipt_builder;
 
-pub use executor::apply_precompiles;
+pub use executor::{
+    ScopedReadPrecompileForwarder, apply_precompiles, apply_precompiles_with_forwarder,
+};
 
 /// HL EVM implementation.
 ///

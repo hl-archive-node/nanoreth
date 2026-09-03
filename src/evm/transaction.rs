@@ -17,11 +17,28 @@ pub trait HlTxTr: Transaction {}
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct HlTxEnv<T: Transaction> {
     pub base: T,
+    #[cfg_attr(feature = "serde", serde(skip))]
+    pub rpc_state_block_number: Option<u64>,
 }
 
 impl<T: Transaction> HlTxEnv<T> {
     pub fn new(base: T) -> Self {
-        Self { base }
+        Self { base, rpc_state_block_number: None }
+    }
+}
+
+pub trait HlTxEnvExt {
+    fn rpc_state_block_number(&self) -> Option<u64>;
+    fn set_rpc_state_block_number(&mut self, block_number: u64);
+}
+
+impl<T: Transaction> HlTxEnvExt for HlTxEnv<T> {
+    fn rpc_state_block_number(&self) -> Option<u64> {
+        self.rpc_state_block_number
+    }
+
+    fn set_rpc_state_block_number(&mut self, block_number: u64) {
+        self.rpc_state_block_number = Some(block_number);
     }
 }
 
@@ -133,7 +150,7 @@ impl FromTxWithEncoded<TransactionSigned> for HlTxEnv<TxEnv> {
             Transaction::Eip7702(tx) => TxEnv::from_recovered_tx(&tx, sender),
         };
 
-        Self { base }
+        Self { base, rpc_state_block_number: None }
     }
 }
 
