@@ -1,6 +1,6 @@
 use super::block_store::BlockStore;
 use crate::{
-    chainspec::HlChainSpec,
+    chainspec::{HlChainSpec, TESTNET_CHAIN_ID},
     node::{
         network::{HlNetworkPrimitives, HlNewBlock},
         types::BlockAndReceipts,
@@ -30,6 +30,10 @@ use tracing::{debug, info, warn};
 
 const BODY_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
+const fn source_reorgs_enabled(chain_id: u64) -> bool {
+    chain_id == TESTNET_CHAIN_ID
+}
+
 /// A block poller that polls blocks from `BlockStore` and sends them to the `block_tx`
 #[derive(Debug)]
 pub struct BlockPoller {
@@ -48,7 +52,13 @@ impl BlockPoller {
         let (start_tx, start_rx) = mpsc::channel(1);
         let (block_tx, block_rx) = mpsc::channel(100);
         let store = block_store.clone();
-        let task = tokio::spawn(Self::task(start_rx, store, block_tx, debug_cutoff_height));
+        let task = tokio::spawn(Self::task(
+            start_rx,
+            store,
+            block_tx,
+            debug_cutoff_height,
+            source_reorgs_enabled(chain_id),
+        ));
         (Self { chain_id, block_rx, task, block_store }, start_tx)
     }
 
@@ -62,6 +72,7 @@ impl BlockPoller {
         block_store: Arc<BlockStore>,
         block_tx: mpsc::Sender<(u64, BlockAndReceipts)>,
         debug_cutoff_height: Option<u64>,
+        source_reorgs_enabled: bool,
     ) -> eyre::Result<()> {
         start_rx.recv().await.ok_or(eyre::eyre!("Failed to receive start signal"))?;
         info!("Starting block poller");
@@ -80,7 +91,8 @@ impl BlockPoller {
                 next_block_number = debug_cutoff_height;
             }
 
-            if next_block_number > 0 && Instant::now() >= next_reorg_check {
+            if source_reorgs_enabled && next_block_number > 0 && Instant::now() >= next_reorg_check
+            {
                 next_reorg_check = Instant::now() + Duration::from_secs(1);
                 let previous = next_block_number - 1;
                 if let Ok((refreshed, changed)) = block_store.refresh_by_number(previous).await {
@@ -101,7 +113,8 @@ impl BlockPoller {
 
             match block_store.get_by_number(next_block_number).await {
                 Ok(block) => {
-                    if next_block_number > 0
+                    if source_reorgs_enabled
+                        && next_block_number > 0
                         && block_store
                             .get_by_number(next_block_number - 1)
                             .await
@@ -126,7 +139,9 @@ impl BlockImport<HlNewBlock> for BlockPoller {
         loop {
             match Pin::new(&mut self.block_rx).poll_recv(_cx) {
                 Poll::Ready(Some((number, block))) => {
-                    if !self.block_store.is_cached_canonical_hash(block.hash()) {
+                    if source_reorgs_enabled(self.chain_id)
+                        && !self.block_store.is_cached_canonical_hash(block.hash())
+                    {
                         debug!(number, hash = %block.hash(), "Dropping stale queued block");
                         continue;
                     }
@@ -150,6 +165,19 @@ impl BlockImport<HlNewBlock> for BlockPoller {
     }
 
     fn on_new_block(&mut self, _peer_id: PeerId, _incoming_block: NewBlockEvent<HlNewBlock>) {}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::chainspec::MAINNET_CHAIN_ID;
+
+    #[test]
+    fn source_reorg_handling_is_testnet_only() {
+        assert!(source_reorgs_enabled(TESTNET_CHAIN_ID));
+        assert!(!source_reorgs_enabled(MAINNET_CHAIN_ID));
+        assert!(!source_reorgs_enabled(1));
+    }
 }
 
 /// A pseudo peer that can process eth requests and feed blocks to reth
