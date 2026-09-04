@@ -281,7 +281,9 @@ mod tests {
         let head_hash = B256::repeat_byte(2);
         let consensus = HlConsensus {
             provider: MockProvider::new(10, B256::repeat_byte(1)),
-            finalization_policy: FinalizationPolicy::Immediate,
+            finalization_policy: FinalizationPolicy::from_chain_id(
+                crate::chainspec::MAINNET_CHAIN_ID,
+            ),
         };
 
         assert_eq!(consensus.finalized_hash(head_hash, 11).unwrap(), head_hash);

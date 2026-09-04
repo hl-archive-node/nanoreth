@@ -299,12 +299,89 @@ impl PseudoPeer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::chainspec::MAINNET_CHAIN_ID;
+    use crate::{
+        chainspec::MAINNET_CHAIN_ID,
+        pseudo_peer::sources::{BlockSource, test_utils},
+    };
+    use futures::FutureExt;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::sync::Notify;
+
+    #[derive(Debug)]
+    struct CountingSource {
+        refreshes: Arc<AtomicUsize>,
+        collected: Arc<Notify>,
+        refreshed: Arc<Notify>,
+    }
+
+    impl BlockSource for CountingSource {
+        fn collect_block(
+            &self,
+            height: u64,
+        ) -> futures::future::BoxFuture<'static, eyre::Result<BlockAndReceipts>> {
+            self.collected.notify_one();
+            async move { Ok(test_utils::block(height, height as u8)) }.boxed()
+        }
+
+        fn refresh_block(
+            &self,
+            height: u64,
+        ) -> futures::future::BoxFuture<'static, eyre::Result<BlockAndReceipts>> {
+            self.refreshes.fetch_add(1, Ordering::SeqCst);
+            self.refreshed.notify_one();
+            async move { Ok(test_utils::block(height, height as u8)) }.boxed()
+        }
+
+        fn find_latest_block_number(&self) -> futures::future::BoxFuture<'static, Option<u64>> {
+            async { Some(2) }.boxed()
+        }
+
+        fn recommended_chunk_size(&self) -> u64 {
+            1
+        }
+    }
+
+    fn counting_store() -> (Arc<BlockStore>, Arc<AtomicUsize>, Arc<Notify>, Arc<Notify>) {
+        let refreshes = Arc::new(AtomicUsize::new(0));
+        let collected = Arc::new(Notify::new());
+        let refreshed = Arc::new(Notify::new());
+        let source = CountingSource {
+            refreshes: refreshes.clone(),
+            collected: collected.clone(),
+            refreshed: refreshed.clone(),
+        };
+        let store = Arc::new(BlockStore::new(Arc::new(Box::new(source)), None, MAINNET_CHAIN_ID));
+        (store, refreshes, collected, refreshed)
+    }
 
     #[test]
     fn source_reorg_handling_is_testnet_only() {
         assert!(source_reorgs_enabled(TESTNET_CHAIN_ID));
         assert!(!source_reorgs_enabled(MAINNET_CHAIN_ID));
         assert!(!source_reorgs_enabled(1));
+    }
+
+    #[tokio::test]
+    async fn mainnet_poller_never_refreshes_source_blocks() {
+        let (store, refreshes, collected, _) = counting_store();
+        let (poller, start) = BlockPoller::new_suspended(MAINNET_CHAIN_ID, store, None);
+
+        start.send(()).await.unwrap();
+        collected.notified().await;
+
+        assert_eq!(refreshes.load(Ordering::SeqCst), 0);
+        poller.task.abort();
+    }
+
+    #[tokio::test]
+    async fn testnet_poller_refreshes_source_blocks() {
+        let (store, refreshes, _, refreshed) = counting_store();
+        let (poller, start) = BlockPoller::new_suspended(TESTNET_CHAIN_ID, store, None);
+
+        start.send(()).await.unwrap();
+        refreshed.notified().await;
+
+        assert_eq!(refreshes.load(Ordering::SeqCst), 1);
+        poller.task.abort();
     }
 }
