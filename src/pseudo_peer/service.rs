@@ -167,19 +167,6 @@ impl BlockImport<HlNewBlock> for BlockPoller {
     fn on_new_block(&mut self, _peer_id: PeerId, _incoming_block: NewBlockEvent<HlNewBlock>) {}
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::chainspec::MAINNET_CHAIN_ID;
-
-    #[test]
-    fn source_reorg_handling_is_testnet_only() {
-        assert!(source_reorgs_enabled(TESTNET_CHAIN_ID));
-        assert!(!source_reorgs_enabled(MAINNET_CHAIN_ID));
-        assert!(!source_reorgs_enabled(1));
-    }
-}
-
 /// A pseudo peer that can process eth requests and feed blocks to reth
 pub struct PseudoPeer {
     chain_spec: Arc<HlChainSpec>,
@@ -306,5 +293,18 @@ impl PseudoPeer {
             eth_req => debug!("New eth protocol request: {eth_req:?}"),
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::chainspec::MAINNET_CHAIN_ID;
+
+    #[test]
+    fn source_reorg_handling_is_testnet_only() {
+        assert!(source_reorgs_enabled(TESTNET_CHAIN_ID));
+        assert!(!source_reorgs_enabled(MAINNET_CHAIN_ID));
+        assert!(!source_reorgs_enabled(1));
     }
 }
