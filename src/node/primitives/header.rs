@@ -244,3 +244,23 @@ impl FromConsensusHeader<HlHeader> for alloy_rpc_types::Header {
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use reth_db_api::table::{Compress, Decompress};
+
+    #[test]
+    fn compact_roundtrip_with_extra_data() {
+        let mut header = HlHeader::default();
+        header.inner.number = 63_313_951;
+        header.inner.extra_data = Bytes::from_static(b"fake-63313946-63313951");
+        header.extras.system_tx_count = 3;
+
+        let mut encoded = Vec::new();
+        header.compress_to_buf(&mut encoded);
+        let decoded = HlHeader::decompress(&encoded).unwrap();
+
+        assert_eq!(decoded, header);
+    }
+}

@@ -8,6 +8,8 @@ mod hl_node;
 mod local;
 mod rpc;
 mod s3;
+#[cfg(test)]
+pub(super) mod test_utils;
 mod utils;
 
 // Public exports
@@ -23,6 +25,11 @@ const DEFAULT_POLLING_INTERVAL: Duration = Duration::from_millis(25);
 pub trait BlockSource: Send + Sync + std::fmt::Debug + Unpin + 'static {
     /// Retrieves a block at the specified height
     fn collect_block(&self, height: u64) -> BoxFuture<'static, eyre::Result<BlockAndReceipts>>;
+
+    /// Retrieves a block without trusting any source-local content cache.
+    fn refresh_block(&self, height: u64) -> BoxFuture<'static, eyre::Result<BlockAndReceipts>> {
+        self.collect_block(height)
+    }
 
     /// Finds the latest block number available from this source
     fn find_latest_block_number(&self) -> BoxFuture<'static, Option<u64>>;

@@ -20,6 +20,17 @@ impl<K: Hash + Eq + Clone + Debug, V: Hash + Eq + Clone + Debug> LruBiMap<K, V> 
     }
 
     pub fn insert(&mut self, key: K, value: V) {
+        if let Some(old_value) = self.left_to_right.get(&key).cloned()
+            && old_value != value
+        {
+            self.right_to_left.remove(&old_value);
+        }
+        if let Some(old_key) = self.right_to_left.get(&value).cloned()
+            && old_key != key
+        {
+            self.left_to_right.remove(&old_key);
+            self.lru_keys.remove(&old_key);
+        }
         if let (true, Some(evicted)) = self.lru_keys.insert_and_get_evicted(key.clone()) {
             self.evict(&evicted);
         }
@@ -35,9 +46,54 @@ impl<K: Hash + Eq + Clone + Debug, V: Hash + Eq + Clone + Debug> LruBiMap<K, V> 
         self.right_to_left.get(value)
     }
 
+    pub fn remove_by_left(&mut self, key: &K) {
+        self.evict(key);
+    }
+
     fn evict(&mut self, key: &K) {
+        self.lru_keys.remove(key);
         if let Some(value) = self.left_to_right.remove(key) {
             self.right_to_left.remove(&value);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LruBiMap;
+
+    #[test]
+    fn replacing_a_value_removes_the_old_key() {
+        let mut map = LruBiMap::new(4);
+        map.insert("old", 1);
+        map.insert("new", 1);
+
+        assert_eq!(map.get_by_left(&"old"), None);
+        assert_eq!(map.get_by_left(&"new"), Some(&1));
+        assert_eq!(map.get_by_right(&1), Some(&"new"));
+        assert_eq!(map.lru_keys.len(), 1);
+    }
+
+    #[test]
+    fn replacing_a_key_removes_the_old_value() {
+        let mut map = LruBiMap::new(4);
+        map.insert("block", 1);
+        map.insert("block", 2);
+
+        assert_eq!(map.get_by_right(&1), None);
+        assert_eq!(map.get_by_right(&2), Some(&"block"));
+        assert_eq!(map.lru_keys.len(), 1);
+    }
+
+    #[test]
+    fn removing_a_key_removes_it_from_the_lru() {
+        let mut map = LruBiMap::new(4);
+        map.insert("block", 1);
+
+        map.remove_by_left(&"block");
+
+        assert_eq!(map.get_by_left(&"block"), None);
+        assert_eq!(map.get_by_right(&1), None);
+        assert!(map.lru_keys.is_empty());
     }
 }
