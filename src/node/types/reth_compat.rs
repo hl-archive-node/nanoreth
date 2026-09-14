@@ -7,12 +7,12 @@ use reth_db_api::{Database, transaction::DbTxMut};
 use reth_primitives::TransactionSigned as RethTxSigned;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashSet},
     sync::{Arc, LazyLock, Mutex, RwLock},
 };
-use tracing::info;
+use tracing::{info, warn};
 
-use super::patch::recover_testnet_system_tx_sender;
+use super::patch::{ERC20_TRANSFER_TOPIC, recover_testnet_system_tx_sender};
 use crate::{
     HlBlock, HlBlockBody, HlHeader,
     node::{
@@ -137,6 +137,11 @@ static DB_HANDLE: LazyLock<Mutex<Option<Arc<DatabaseEnv>>>> = LazyLock::new(|| M
 // API on a cache miss, so a thundering herd of misses produces one request.
 static SPOT_FETCH_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
+/// Contracts confirmed absent from the spot mapping, so repeated conversions of
+/// system txs to the same non-spot target skip the spotMeta fetch.
+static NON_SPOT_CONTRACTS: LazyLock<RwLock<HashSet<Address>>> =
+    LazyLock::new(|| RwLock::new(HashSet::new()));
+
 /// Set the database handle for persisting spot metadata
 pub fn set_spot_metadata_db(db: Arc<DatabaseEnv>) {
     *DB_HANDLE.lock().unwrap() = Some(db);
@@ -179,6 +184,18 @@ fn persist_spot_metadata_to_db(metadata: &BTreeMap<Address, SpotId>) {
         }
     }
 }
+/// Recover a system tx sender from its own receipt: an ERC-20 `Transfer` log
+/// carries the sender as its first indexed topic.
+fn receipt_transfer_sender(receipt: Option<&LegacyReceipt>) -> Option<Address> {
+    let sender = receipt?.logs.iter().find_map(|log| {
+        let topics = log.data.topics();
+        (topics.first() == Some(&ERC20_TRANSFER_TOPIC) && topics.len() >= 2)
+            .then(|| Address::from_word(topics[1]))
+    })?;
+    // `s_to_address` reserves `s == 1` for the native HYPE system sender, so
+    // that address cannot round-trip through the signature encoding.
+    (U256::from_be_slice(sender.as_slice()) != U256::ONE).then_some(sender)
+}
 
 fn system_tx_to_reth_transaction(
     transaction: &SystemTx,
@@ -204,27 +221,38 @@ fn system_tx_to_reth_transaction(
     } else if tx.input.is_empty() {
         // Native HYPE transfer: sender is the HYPE system address (0x2222…2222), encoded `s == 1`.
         U256::from(0x1)
+    } else if let Some(sender) = receipt_transfer_sender(transaction.receipt.as_ref()) {
+        address_to_s(sender)
+    } else if NON_SPOT_CONTRACTS.read().unwrap().contains(&to) {
+        U256::from(0x1)
     } else {
-        loop {
-            if let Some(spot) = SPOT_EVM_MAP.read().unwrap().get(&to) {
-                break spot.to_s();
-            }
+        // Fetch the mapping once: a contract absent from it is a legitimate
+        // non-spot target (e.g. an HRC20) and must not be retried on every
+        // conversion, or the node spins on the info API forever.
+        let _fetch_guard = SPOT_FETCH_LOCK.lock().unwrap();
 
-            // Cache miss - single-flight the API fetch so concurrent misses don't
-            // each hit the API. Only the thread holding SPOT_FETCH_LOCK fetches;
-            // the rest block here and re-check the cache once it's released.
-            let _fetch_guard = SPOT_FETCH_LOCK.lock().unwrap();
-
-            // Double-checked: another thread may have populated the cache while we
-            // waited for the fetch lock.
-            if SPOT_EVM_MAP.read().unwrap().contains_key(&to) {
-                continue;
-            }
-
+        // Double-checked: another thread may have populated the cache while we
+        // waited for the fetch lock.
+        if let Some(spot) = SPOT_EVM_MAP.read().unwrap().get(&to) {
+            spot.to_s()
+        } else {
             info!("Contract not found: {to:?} from spot mapping, fetching from API...");
-            let metadata = erc20_contract_to_spot_token(chain_id).unwrap();
-            *SPOT_EVM_MAP.write().unwrap() = metadata.clone();
-            persist_spot_metadata_to_db(&metadata);
+            match erc20_contract_to_spot_token(chain_id) {
+                Ok(metadata) if metadata.contains_key(&to) => {
+                    let spot = &metadata[&to];
+                    *SPOT_EVM_MAP.write().unwrap() = metadata.clone();
+                    persist_spot_metadata_to_db(&metadata);
+                    spot.to_s()
+                }
+                Ok(_) => {
+                    warn!(
+                        "Contract {to:?} is not a spot token, defaulting system tx encoding"
+                    );
+                    NON_SPOT_CONTRACTS.write().unwrap().insert(to);
+                    U256::from(0x1)
+                }
+                Err(_) => U256::from(0x1),
+            }
         }
     };
     let signature = Signature::new(U256::from(0x1), s, true);
@@ -280,7 +308,7 @@ impl SealedBlock {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::chainspec::TESTNET_CHAIN_ID;
+    use crate::chainspec::{MAINNET_CHAIN_ID, TESTNET_CHAIN_ID};
     use alloy_consensus::{Transaction as _, TxType};
     use alloy_primitives::{Log, LogData, address, b256};
     use reth_ethereum_primitives::EthereumReceipt;
@@ -329,6 +357,37 @@ mod tests {
             // `from` path set explicitly per-test.
             from: None,
         }
+    }
+
+    #[test]
+    fn receipt_transfer_log_recovers_sender_for_non_spot_target() {
+        // Mainnet system tx to a contract absent from the spot mapping: the
+        // receipt Transfer log provides the sender without a spotMeta fetch.
+        let tx = system_tx(HOLDER_A, TOKEN, 7);
+        let signed = system_tx_to_reth_transaction(&tx, MAINNET_CHAIN_ID, 12);
+        assert_eq!(signed.recover_signer().unwrap(), HOLDER_A);
+    }
+
+    #[test]
+    fn known_non_spot_target_falls_back_to_default_encoding() {
+        let token = address!("000000000000000000000000000000000000dead");
+        NON_SPOT_CONTRACTS.write().unwrap().insert(token);
+        let mut tx = system_tx(HOLDER_A, token, 9);
+        // No Transfer log to recover from: the default encoding must apply.
+        tx.receipt = Some(
+            EthereumReceipt {
+                tx_type: TxType::Legacy,
+                success: true,
+                cumulative_gas_used: 0,
+                logs: vec![],
+            }
+            .into(),
+        );
+        let signed = system_tx_to_reth_transaction(&tx, MAINNET_CHAIN_ID, 12);
+        assert_eq!(
+            signed.recover_signer().unwrap(),
+            address!("2222222222222222222222222222222222222222")
+        );
     }
 
     #[test]
