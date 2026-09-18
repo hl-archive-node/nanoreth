@@ -5,7 +5,7 @@ use alloy_primitives::{Address, B256, U256, address, b256};
 use std::ops::Range;
 
 /// `keccak256("Transfer(address,address,uint256)")` - the ERC-20 `Transfer` topic.
-const ERC20_TRANSFER_TOPIC: B256 =
+pub(super) const ERC20_TRANSFER_TOPIC: B256 =
     b256!("ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef");
 
 /// Token contract whose testnet system transactions need real-sender recovery.
