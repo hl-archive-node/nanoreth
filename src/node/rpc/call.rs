@@ -145,6 +145,7 @@ where
         EthApiError: From<<DB as RevmDatabase>::Error>,
     {
         let rpc_state_block_number = evm_env.block_env.number.to();
+        let block_gas_limit_override = overrides.block.as_ref().and_then(|block| block.gas_limit);
         let request_has_gas_limit = request.as_ref().gas_limit().is_some();
 
         if let Some(requested_gas) = request.as_ref().gas_limit() {
@@ -183,7 +184,11 @@ where
         if !request_has_gas_limit && tx_env.gas_price() > 0 {
             trace!(target: "rpc::eth::call", ?tx_env, "Applying gas limit cap with caller allowance");
             let cap = self.caller_gas_allowance(db, &evm_env, &tx_env)?;
-            tx_env.set_gas_limit(cap.min(rpc_gas_ceiling(evm_env.block_env.gas_limit)));
+            // An explicit block gas limit override stays the ceiling.
+            let ceiling = block_gas_limit_override.unwrap_or_else(|| {
+                rpc_gas_ceiling(evm_env.block_env.gas_limit, self.call_gas_limit())
+            });
+            tx_env.set_gas_limit(cap.min(ceiling));
         }
 
         Ok((evm_env, tx_env))
