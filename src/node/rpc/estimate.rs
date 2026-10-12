@@ -1,4 +1,4 @@
-use super::{HlEthApi, HlRpcNodeCore};
+use super::{HlEthApi, HlRpcNodeCore, rpc_gas_ceiling};
 use alloy_evm::overrides::{StateOverrideError, apply_block_overrides, apply_state_overrides};
 use alloy_network::TransactionBuilder;
 use alloy_primitives::{TxKind, U256};
@@ -57,11 +57,14 @@ where
         evm_env.cfg_env.disable_base_fee = true;
         evm_env.cfg_env.disable_fee_charge = true;
         evm_env.cfg_env.memory_limit = self.evm_memory_limit();
+        // The gas ceiling can be above the gas limit of a small block.
+        evm_env.cfg_env.disable_block_gas_limit = true;
 
         request.as_mut().take_nonce();
 
         let tx_request_gas_limit = request.as_ref().gas_limit();
         let tx_request_gas_price = request.as_ref().gas_price();
+        let block_gas_limit_override = overrides.block.as_ref().and_then(|block| block.gas_limit);
 
         let mut db = State::builder().with_database(StateProviderDatabase::new(state)).build();
 
@@ -79,11 +82,14 @@ where
             )?;
         }
 
-        let block_gas_limit = evm_env.block_env.gas_limit();
+        // An explicit block gas limit override stays the ceiling.
+        let block_gas_ceiling = block_gas_limit_override.unwrap_or_else(|| {
+            rpc_gas_ceiling(evm_env.block_env.gas_limit(), self.call_gas_limit())
+        });
         let mut max_gas_limit = if evm_env.cfg_env.is_amsterdam_eip8037_enabled() {
-            block_gas_limit
+            block_gas_ceiling
         } else {
-            evm_env.cfg_env.tx_gas_limit_cap().min(block_gas_limit)
+            evm_env.cfg_env.tx_gas_limit_cap().min(block_gas_ceiling)
         };
 
         // Bound the search by the RPC gas cap as well, as upstream does. Zero means unlimited.
@@ -115,7 +121,8 @@ where
                 highest_gas_limit.min(self.caller_gas_allowance(&mut db, &evm_env, &tx_env)?);
         }
 
-        tx_env.set_gas_limit(tx_env.gas_limit().min(highest_gas_limit));
+        // `create_txn_env` defaults a missing gas limit to the block gas limit, so set it here.
+        tx_env.set_gas_limit(highest_gas_limit);
 
         // The RPC EVM factory installs the block\'s read precompiles.
         let mut evm = self.evm_config().evm_with_env(&mut db, evm_env);
