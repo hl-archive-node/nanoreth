@@ -1,4 +1,4 @@
-use super::{HlEthApi, HlRpcNodeCore, apply_precompiles_with_forwarder};
+use super::{HlEthApi, HlRpcNodeCore, apply_precompiles_with_forwarder, rpc_gas_ceiling};
 use alloy_evm::overrides::{StateOverrideError, apply_state_overrides};
 use alloy_network::TransactionBuilder;
 use alloy_primitives::{TxKind, U256};
@@ -49,15 +49,18 @@ where
     {
         evm_env.cfg_env.disable_eip3607 = true;
         evm_env.cfg_env.disable_base_fee = true;
+        // The gas ceiling can be above the gas limit of a small block.
+        evm_env.cfg_env.disable_block_gas_limit = true;
 
         request.as_mut().take_nonce();
 
         let tx_request_gas_limit = request.as_ref().gas_limit();
         let tx_request_gas_price = request.as_ref().gas_price();
+        let block_gas_ceiling = rpc_gas_ceiling(evm_env.block_env.gas_limit, self.call_gas_limit());
         let max_gas_limit = evm_env
             .cfg_env
             .tx_gas_limit_cap
-            .map_or(evm_env.block_env.gas_limit, |cap| cap.min(evm_env.block_env.gas_limit));
+            .map_or(block_gas_ceiling, |cap| cap.min(block_gas_ceiling));
 
         let mut highest_gas_limit = tx_request_gas_limit
             .map(|mut tx_gas_limit| {
@@ -94,7 +97,8 @@ where
                 highest_gas_limit.min(self.caller_gas_allowance(&mut db, &evm_env, &tx_env)?);
         }
 
-        tx_env.set_gas_limit(tx_env.gas_limit().min(highest_gas_limit));
+        // `create_txn_env` defaults a missing gas limit to the block gas limit, so set it here.
+        tx_env.set_gas_limit(highest_gas_limit);
 
         let block_number = evm_env.block_env().number;
         let (hl_extras, forwarder) = self.hl_call_precompiles(block_number.to())?;

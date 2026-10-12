@@ -68,6 +68,23 @@ mod transaction;
 
 pub trait HlRpcNodeCore: RpcNodeCore<Primitives: NodePrimitives<Block = HlBlock>> {}
 
+/// Gas limit of a HyperEVM big block.
+///
+/// Most HyperEVM blocks are small blocks with a lower gas limit. A transaction that needs more gas
+/// goes into a big block, so a small block's gas limit is not an upper bound for a transaction.
+const BIG_BLOCK_GAS_LIMIT: u64 = 30_000_000;
+
+/// Returns the gas ceiling for calls and estimates against a block.
+///
+/// Used by `eth_estimateGas` and by priced calls without `gas` (`eth_call`, `eth_callMany`,
+/// `debug_traceCall`, `trace_call` and related methods). Upstream reth uses the block gas limit.
+/// On a small block that rejects transactions that are valid in a big block, so this never goes
+/// below the big block gas limit, like hl-node. A non-zero RPC gas cap still applies.
+pub(crate) fn rpc_gas_ceiling(block_gas_limit: u64, rpc_gas_cap: u64) -> u64 {
+    let ceiling = block_gas_limit.max(BIG_BLOCK_GAS_LIMIT);
+    if rpc_gas_cap == 0 { ceiling } else { ceiling.min(rpc_gas_cap) }
+}
+
 /// Container type `HlEthApi`
 pub(crate) struct HlEthApiInner<N: HlRpcNodeCore, Rpc: RpcConvert> {
     /// Gateway to node's core components.
@@ -507,5 +524,27 @@ where
         let eth_api = ctx.eth_api_builder().with_rpc_converter(rpc_converter).build_inner();
 
         Ok(HlEthApi { inner: Arc::new(HlEthApiInner { eth_api }) })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rpc_gas_ceiling_uses_big_block_gas_limit() {
+        // Small block: 30M, not the 3M block gas limit.
+        assert_eq!(rpc_gas_ceiling(3_000_000, 50_000_000), 30_000_000);
+        // Big block.
+        assert_eq!(rpc_gas_ceiling(30_000_000, 50_000_000), 30_000_000);
+        // A block gas limit above 30M is kept.
+        assert_eq!(rpc_gas_ceiling(36_000_000, 50_000_000), 36_000_000);
+    }
+
+    #[test]
+    fn rpc_gas_ceiling_respects_rpc_gas_cap() {
+        assert_eq!(rpc_gas_ceiling(3_000_000, 5_000_000), 5_000_000);
+        // A cap of 0 means no cap, as in `prepare_call_env`.
+        assert_eq!(rpc_gas_ceiling(3_000_000, 0), 30_000_000);
     }
 }
