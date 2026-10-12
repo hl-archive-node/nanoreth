@@ -1,6 +1,6 @@
 use core::fmt;
 
-use super::{HlEthApi, HlRpcNodeCore};
+use super::{HlEthApi, HlRpcNodeCore, rpc_gas_ceiling};
 use crate::{
     HlBlock,
     evm::transaction::HlTxEnvExt,
@@ -183,7 +183,7 @@ where
         if !request_has_gas_limit && tx_env.gas_price() > 0 {
             trace!(target: "rpc::eth::call", ?tx_env, "Applying gas limit cap with caller allowance");
             let cap = self.caller_gas_allowance(db, &evm_env, &tx_env)?;
-            tx_env.set_gas_limit(cap.min(evm_env.block_env.gas_limit));
+            tx_env.set_gas_limit(cap.min(rpc_gas_ceiling(evm_env.block_env.gas_limit)));
         }
 
         Ok((evm_env, tx_env))

@@ -68,6 +68,20 @@ mod transaction;
 
 pub trait HlRpcNodeCore: RpcNodeCore<Primitives: NodePrimitives<Block = HlBlock>> {}
 
+/// Gas limit of a HyperEVM big block.
+///
+/// Most HyperEVM blocks are small blocks with a lower gas limit. A transaction that needs more gas
+/// goes into a big block, so a small block's gas limit is not an upper bound for a transaction.
+const BIG_BLOCK_GAS_LIMIT: u64 = 30_000_000;
+
+/// Returns the gas ceiling for `eth_call` and `eth_estimateGas` against a block.
+///
+/// Upstream reth uses the block gas limit. On a small block that rejects transactions that are
+/// valid in a big block, so this matches hl-node and never goes below the big block gas limit.
+pub(crate) fn rpc_gas_ceiling(block_gas_limit: u64) -> u64 {
+    block_gas_limit.max(BIG_BLOCK_GAS_LIMIT)
+}
+
 /// Container type `HlEthApi`
 pub(crate) struct HlEthApiInner<N: HlRpcNodeCore, Rpc: RpcConvert> {
     /// Gateway to node's core components.
@@ -507,5 +521,20 @@ where
         let eth_api = ctx.eth_api_builder().with_rpc_converter(rpc_converter).build_inner();
 
         Ok(HlEthApi { inner: Arc::new(HlEthApiInner { eth_api }) })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rpc_gas_ceiling_uses_big_block_gas_limit() {
+        // Small block.
+        assert_eq!(rpc_gas_ceiling(3_000_000), BIG_BLOCK_GAS_LIMIT);
+        // Big block.
+        assert_eq!(rpc_gas_ceiling(30_000_000), 30_000_000);
+        // A block gas limit above the big block gas limit is kept.
+        assert_eq!(rpc_gas_ceiling(36_000_000), 36_000_000);
     }
 }
