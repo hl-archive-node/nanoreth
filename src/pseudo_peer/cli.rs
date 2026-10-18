@@ -31,6 +31,11 @@ pub struct BlockSourceArgs {
     #[arg(id = "s3.polling-interval", long = "s3.polling-interval", default_value = "25")]
     s3_polling_interval: u64,
 
+    /// Maximum number of concurrent S3 requests when fetching a range of blocks.
+    /// Lower it on slow or congested links, where many parallel downloads stall.
+    #[arg(id = "s3.concurrency", long = "s3.concurrency", default_value = "1000")]
+    s3_concurrency: usize,
+
     /// Interval for polling new blocks from RPC source in milliseconds.
     #[arg(id = "rpc.polling-interval", long = "rpc.polling-interval", default_value = "100")]
     rpc_polling_interval: u64,
@@ -57,8 +62,11 @@ impl BlockSourceArgs {
     async fn create_base_config(&self) -> eyre::Result<Option<BlockSourceConfig>> {
         if self.s3 {
             return Ok(Some(
-                BlockSourceConfig::s3_default(Duration::from_millis(self.s3_polling_interval))
-                    .await,
+                BlockSourceConfig::s3_default(
+                    Duration::from_millis(self.s3_polling_interval),
+                    self.s3_concurrency,
+                )
+                .await,
             ));
         }
 
@@ -76,6 +84,7 @@ impl BlockSourceArgs {
                 BlockSourceConfig::s3(
                     bucket.to_string(),
                     Duration::from_millis(self.s3_polling_interval),
+                    self.s3_concurrency,
                 )
                 .await,
             ))
