@@ -4,7 +4,12 @@ use aws_sdk_s3::types::RequestPayer;
 use futures::{FutureExt, future::BoxFuture};
 use reth_metrics::{Metrics, metrics, metrics::Counter};
 use std::{sync::Arc, time::Duration};
-use tracing::info;
+use tracing::{info, warn};
+
+/// Attempts per block in a range fetch before the whole range fails.
+const RANGE_FETCH_MAX_ATTEMPTS: u32 = 6;
+/// First retry delay in a range fetch; doubles each attempt (0.5 + 1 + 2 + 4 + 8 s).
+const RANGE_FETCH_INITIAL_BACKOFF: Duration = Duration::from_millis(500);
 
 /// Block source that reads blocks from S3 (--s3)
 #[derive(Debug, Clone)]
@@ -12,6 +17,7 @@ pub struct S3BlockSource {
     client: Arc<aws_sdk_s3::Client>,
     bucket: String,
     polling_interval: Duration,
+    concurrency: usize,
     metrics: S3BlockSourceMetrics,
 }
 
@@ -22,16 +28,39 @@ pub struct S3BlockSourceMetrics {
     pub polling_attempt: Counter,
     /// How many times the S3 block source has polled a block
     pub fetched: Counter,
+    /// How many range block fetches were retried after a failure
+    pub retried: Counter,
 }
 
 impl S3BlockSource {
-    pub fn new(client: aws_sdk_s3::Client, bucket: String, polling_interval: Duration) -> Self {
+    pub fn new(
+        client: aws_sdk_s3::Client,
+        bucket: String,
+        polling_interval: Duration,
+        concurrency: usize,
+    ) -> Self {
         Self {
             client: client.into(),
             bucket,
             polling_interval,
+            concurrency,
             metrics: S3BlockSourceMetrics::default(),
         }
+    }
+
+    /// Fetches a block inside a requested range, retrying transient failures such as stalled
+    /// streams or dispatch failures.
+    async fn collect_block_with_retry(self, height: u64) -> eyre::Result<BlockAndReceipts> {
+        utils::retry_with_backoff(
+            RANGE_FETCH_MAX_ATTEMPTS,
+            RANGE_FETCH_INITIAL_BACKOFF,
+            || self.collect_block(height),
+            |attempt, err| {
+                self.metrics.retried.increment(1);
+                warn!(height, attempt, %err, "S3 block fetch failed, retrying");
+            },
+        )
+        .await
     }
 
     async fn pick_path_with_highest_number(
@@ -105,40 +134,29 @@ impl BlockSource for S3BlockSource {
         .boxed()
     }
 
-    /// Uses `tokio::spawn` batches instead of the default `buffered()` stream.
-    /// This distributes response processing across the runtime's thread pool,
-    /// avoiding the single-task polling bottleneck (~10x faster on fast networks).
+    /// Uses `tokio::spawn` instead of the default `buffered()` stream. This distributes response
+    /// processing across the runtime's thread pool, avoiding the single-task polling bottleneck
+    /// (~10x faster on fast networks).
+    ///
+    /// Each block is retried on its own: otherwise one stalled GET (common on a congested link)
+    /// fails the whole range, the peer re-requests it from scratch and the range never completes.
     fn collect_blocks(
         &self,
         heights: Vec<u64>,
     ) -> BoxFuture<'static, eyre::Result<Vec<BlockAndReceipts>>> {
-        let concurrency = self.recommended_chunk_size() as usize;
-        let futs: Vec<_> = heights
-            .into_iter()
-            .map(|h| self.collect_block(h))
-            .collect();
+        let source = self.clone();
         async move {
-            let mut results = Vec::with_capacity(futs.len());
-            let mut futs = futs.into_iter();
-            loop {
-                let batch: Vec<_> = (&mut futs)
-                    .take(concurrency)
-                    .map(|fut| tokio::spawn(fut))
-                    .collect();
-                if batch.is_empty() {
-                    break;
-                }
-                for handle in batch {
-                    results.push(handle.await.map_err(|e| eyre::eyre!(e))??);
-                }
-            }
-            Ok(results)
+            let concurrency = source.concurrency;
+            utils::fetch_ordered(heights, concurrency, move |height| {
+                source.clone().collect_block_with_retry(height)
+            })
+            .await
         }
         .boxed()
     }
 
     fn recommended_chunk_size(&self) -> u64 {
-        1000
+        self.concurrency as u64
     }
 
     fn polling_interval(&self) -> Duration {
