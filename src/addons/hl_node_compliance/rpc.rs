@@ -13,9 +13,9 @@ use alloy_consensus::{
 };
 use alloy_eips::{BlockId, BlockNumberOrTag};
 use alloy_json_rpc::RpcObject;
-use alloy_primitives::{B256, U256};
+use alloy_primitives::{B256, Bytes, U256};
 use alloy_rpc_types::{
-    BlockTransactions, Filter, FilterChanges, FilterId, Log, TransactionInfo,
+    BlockTransactions, Filter, FilterChanges, FilterId, Index, Log, TransactionInfo,
     pubsub::{Params, SubscriptionKind},
 };
 use jsonrpsee::{PendingSubscriptionSink, proc_macros::rpc};
@@ -450,7 +450,7 @@ impl<Eth: EthWrapper> HlNodeBlockFilterHttp<Eth> {
 }
 
 #[rpc(server, namespace = "eth")]
-pub trait EthBlockApi<B: RpcObject, R: RpcObject> {
+pub trait EthBlockApi<B: RpcObject, R: RpcObject, T: RpcObject> {
     /// Returns information about a block by hash.
     #[method(name = "getBlockByHash", with_extensions)]
     async fn block_by_hash(&self, hash: B256, full: bool) -> RpcResult<Option<B>>;
@@ -481,6 +481,34 @@ pub trait EthBlockApi<B: RpcObject, R: RpcObject> {
 
     #[method(name = "getTransactionReceipt", with_extensions)]
     async fn transaction_receipt(&self, hash: B256) -> RpcResult<Option<R>>;
+
+    #[method(name = "getTransactionByBlockHashAndIndex", with_extensions)]
+    async fn transaction_by_block_hash_and_index(
+        &self,
+        hash: B256,
+        index: Index,
+    ) -> RpcResult<Option<T>>;
+
+    #[method(name = "getTransactionByBlockNumberAndIndex", with_extensions)]
+    async fn transaction_by_block_number_and_index(
+        &self,
+        number: BlockNumberOrTag,
+        index: Index,
+    ) -> RpcResult<Option<T>>;
+
+    #[method(name = "getRawTransactionByBlockHashAndIndex", with_extensions)]
+    async fn raw_transaction_by_block_hash_and_index(
+        &self,
+        hash: B256,
+        index: Index,
+    ) -> RpcResult<Option<Bytes>>;
+
+    #[method(name = "getRawTransactionByBlockNumberAndIndex", with_extensions)]
+    async fn raw_transaction_by_block_number_and_index(
+        &self,
+        number: BlockNumberOrTag,
+        index: Index,
+    ) -> RpcResult<Option<Bytes>>;
 }
 
 macro_rules! engine_span {
@@ -700,9 +728,44 @@ fn system_tx_count_for_block<Eth: EthWrapper>(
     Ok(header.map(|header| header.extras.system_tx_count as usize))
 }
 
+/// Resolves `block_id` to a concrete block number plus its system tx count, so a tag such as
+/// `latest` can't move to the next block between counting system txs and fetching the tx.
+/// Returns `None` if the header isn't available locally.
+fn resolve_block_for_index<Eth: EthWrapper>(
+    eth_api: &Eth,
+    block_id: BlockId,
+) -> Result<Option<(BlockNumberOrTag, usize)>, Eth::Error> {
+    let provider = eth_api.provider();
+    let header = provider.header_by_id(block_id).map_err(Eth::Error::from_eth_err)?;
+    Ok(header.map(|header| {
+        (BlockNumberOrTag::Number(header.number()), header.extras.system_tx_count as usize)
+    }))
+}
+
+/// Maps a compliant (system txs hidden) index to the index in the full block, where the system
+/// txs occupy the first `system_tx_count` positions.
+fn full_block_index(index: Index, system_tx_count: usize) -> Index {
+    Index::from(usize::from(index).saturating_add(system_tx_count))
+}
+
+/// Shifts the `transactionIndex` of a tx looked up in the full block back to its compliant index.
+fn adjust_transaction_index(
+    mut tx: alloy_rpc_types_eth::Transaction,
+    system_tx_count: usize,
+) -> alloy_rpc_types_eth::Transaction {
+    if let Some(idx) = &mut tx.transaction_index {
+        *idx -= system_tx_count as u64;
+    }
+    tx
+}
+
 #[async_trait]
-impl<Eth: EthWrapper> EthBlockApiServer<RpcBlock<Eth::NetworkTypes>, RpcReceipt<Eth::NetworkTypes>>
-    for HlNodeBlockFilterHttp<Eth>
+impl<Eth: EthWrapper>
+    EthBlockApiServer<
+        RpcBlock<Eth::NetworkTypes>,
+        RpcReceipt<Eth::NetworkTypes>,
+        RpcTransaction<Eth::NetworkTypes>,
+    > for HlNodeBlockFilterHttp<Eth>
 where
     Eth: EthApiTypes + 'static,
     ErrorObject<'static>: From<Eth::Error>,
@@ -842,6 +905,110 @@ where
             .await?;
         Ok(result)
     }
+
+    /// Handler for: `eth_getTransactionByBlockHashAndIndex`
+    async fn transaction_by_block_hash_and_index(
+        &self,
+        ext: &Extensions,
+        hash: B256,
+        index: Index,
+    ) -> RpcResult<Option<RpcTransaction<Eth::NetworkTypes>>> {
+        trace!(target: "rpc::eth", ?hash, ?index, "Serving eth_getTransactionByBlockHashAndIndex");
+        if !is_hl_compliant(ext, self.default_compliant) {
+            return self
+                .eth_api
+                .transaction_by_block_hash_and_index(hash, index)
+                .instrument(engine_span!())
+                .await;
+        }
+        let Some(system_tx_count) =
+            system_tx_count_for_block(&*self.eth_api, BlockId::Hash(hash.into()))?
+        else {
+            return Ok(None);
+        };
+        let tx = self
+            .eth_api
+            .transaction_by_block_hash_and_index(hash, full_block_index(index, system_tx_count))
+            .instrument(engine_span!())
+            .await?;
+        Ok(tx.map(|tx| adjust_transaction_index(tx, system_tx_count)))
+    }
+
+    /// Handler for: `eth_getTransactionByBlockNumberAndIndex`
+    async fn transaction_by_block_number_and_index(
+        &self,
+        ext: &Extensions,
+        number: BlockNumberOrTag,
+        index: Index,
+    ) -> RpcResult<Option<RpcTransaction<Eth::NetworkTypes>>> {
+        trace!(target: "rpc::eth", ?number, ?index, "Serving eth_getTransactionByBlockNumberAndIndex");
+        if !is_hl_compliant(ext, self.default_compliant) {
+            return self
+                .eth_api
+                .transaction_by_block_number_and_index(number, index)
+                .instrument(engine_span!())
+                .await;
+        }
+        let Some((number, system_tx_count)) =
+            resolve_block_for_index(&*self.eth_api, number.into())?
+        else {
+            return Ok(None);
+        };
+        let tx = self
+            .eth_api
+            .transaction_by_block_number_and_index(number, full_block_index(index, system_tx_count))
+            .instrument(engine_span!())
+            .await?;
+        Ok(tx.map(|tx| adjust_transaction_index(tx, system_tx_count)))
+    }
+
+    /// Handler for: `eth_getRawTransactionByBlockHashAndIndex`
+    async fn raw_transaction_by_block_hash_and_index(
+        &self,
+        ext: &Extensions,
+        hash: B256,
+        index: Index,
+    ) -> RpcResult<Option<Bytes>> {
+        trace!(target: "rpc::eth", ?hash, ?index, "Serving eth_getRawTransactionByBlockHashAndIndex");
+        let index = if is_hl_compliant(ext, self.default_compliant) {
+            let Some(system_tx_count) =
+                system_tx_count_for_block(&*self.eth_api, BlockId::Hash(hash.into()))?
+            else {
+                return Ok(None);
+            };
+            full_block_index(index, system_tx_count)
+        } else {
+            index
+        };
+        self.eth_api
+            .raw_transaction_by_block_hash_and_index(hash, index)
+            .instrument(engine_span!())
+            .await
+    }
+
+    /// Handler for: `eth_getRawTransactionByBlockNumberAndIndex`
+    async fn raw_transaction_by_block_number_and_index(
+        &self,
+        ext: &Extensions,
+        number: BlockNumberOrTag,
+        index: Index,
+    ) -> RpcResult<Option<Bytes>> {
+        trace!(target: "rpc::eth", ?number, ?index, "Serving eth_getRawTransactionByBlockNumberAndIndex");
+        let (number, index) = if is_hl_compliant(ext, self.default_compliant) {
+            let Some((number, system_tx_count)) =
+                resolve_block_for_index(&*self.eth_api, number.into())?
+            else {
+                return Ok(None);
+            };
+            (number, full_block_index(index, system_tx_count))
+        } else {
+            (number, index)
+        };
+        self.eth_api
+            .raw_transaction_by_block_number_and_index(number, index)
+            .instrument(engine_span!())
+            .await
+    }
 }
 
 pub fn install<Node, EthApi>(
@@ -883,4 +1050,21 @@ where
         .merge_configured(HlSystemTransactionExt::new(ctx.registry.eth_api().clone()).into_rpc())?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn full_block_index_skips_system_txs() {
+        assert_eq!(usize::from(full_block_index(Index::from(0), 0)), 0);
+        assert_eq!(usize::from(full_block_index(Index::from(1), 1)), 2);
+        assert_eq!(usize::from(full_block_index(Index::from(3), 2)), 5);
+    }
+
+    #[test]
+    fn full_block_index_saturates() {
+        assert_eq!(usize::from(full_block_index(Index::from(usize::MAX), 1)), usize::MAX);
+    }
 }
