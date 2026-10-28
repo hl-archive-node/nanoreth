@@ -27,6 +27,10 @@ The middle row is an escape: a real sender of `0x00...01` would otherwise encode
 
 The RPC returns this recovered address as each transaction's `from`; together with the zero `gasPrice` and the table above, that lets you recognize system transactions. To confirm them authoritatively, use hl-node's [`eth_getSystemTxsByBlockHash` / `eth_getSystemTxsByBlockNumber`](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/hyperevm/json-rpc) methods, which return the system transactions originating from HyperCore, and source blocks only from a node you trust.
 
+### System transactions without a receipt
+
+hl-node occasionally lists a system transaction that has no receipt (`eth_getTransactionReceipt` returns `null`), such as the `gas: 0` callback at mainnet block 49,461,291. These transactions are not executed, so nanoreth leaves them out of the block: they are missing from block transaction lists and from `eth_getEvmSystemTxsByBlock*`, while hl-node's `eth_getSystemTxsByBlock*` still returns them.
+
 ### Per-request compliance multiplexing
 
 If you need a single endpoint to serve both filtered and unfiltered responses, use `--hl-node-compliant-multiplexed`. This adds a middleware layer that reads the `?hl=` query parameter from each request:

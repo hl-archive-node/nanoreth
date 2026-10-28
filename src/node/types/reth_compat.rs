@@ -240,7 +240,8 @@ impl SealedBlock {
         receipts: Vec<LegacyReceipt>,
         chain_id: u64,
     ) -> HlBlock {
-        // NOTE: These types of transactions are tracked at #97.
+        // System txs without a receipt are not executed by hl-node (#97), so they are not part of
+        // the block.
         system_txs.retain(|tx| tx.receipt.is_some());
 
         let mut merged_txs = vec![];
@@ -400,6 +401,34 @@ mod tests {
         let signed = system_tx_to_reth_transaction(&tx, TESTNET_CHAIN_ID, FROM_BLOCK);
         assert_eq!(signed.recover_signer().unwrap(), one);
         assert_eq!(round_trip_signer(tx), one);
+    }
+
+    #[test]
+    fn receiptless_system_tx_is_dropped() {
+        let mut kept = system_tx(HOLDER_A, TOKEN, 0);
+        kept.from = Some(HOLDER_A);
+        let mut dropped = system_tx(HOLDER_B, TOKEN, 1);
+        dropped.from = Some(HOLDER_B);
+        dropped.receipt = None;
+
+        let sealed = SealedBlock {
+            header: SealedHeader {
+                hash: Default::default(),
+                header: Header { number: 56_000_000, ..Default::default() },
+            },
+            body: BlockBody { transactions: vec![], ommers: vec![], withdrawals: None },
+        };
+        let block = sealed.to_reth_block(
+            Default::default(),
+            None,
+            vec![kept, dropped],
+            vec![],
+            TESTNET_CHAIN_ID,
+        );
+
+        assert_eq!(block.body.inner.transactions.len(), 1);
+        assert_eq!(block.header.extras.system_tx_count, 1);
+        assert_eq!(block.body.inner.transactions[0].recover_signer().unwrap(), HOLDER_A);
     }
 
     /// Full sync round trip (to_reth_block -> from_db -> to_reth_block); returns the re-served
