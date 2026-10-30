@@ -194,6 +194,52 @@ async fn test_update_last_fetch_fallback() -> eyre::Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn test_fallback_keeps_up_while_hl_node_is_behind() -> eyre::Result<()> {
+    let threshold = Duration::from_millis(200);
+    let block_source_fallback = HlNodeBlockSource::new(
+        BlockSourceBoxed::new(Box::new(LocalBlockSource::new("/nonexistent"))),
+        HlNodeBlockSourceArgs {
+            root: PathBuf::from("/nonexistent"),
+            fallback_threshold: threshold,
+        },
+        1000000,
+    )
+    .await;
+    let block_hl_node_0 = empty_block(1000000, 1722633600, b"hl-node");
+    let block_fallback_1 = empty_block(1000001, 1722633601, b"fallback");
+    let block_fallback_2 = empty_block(1000002, 1722633602, b"fallback");
+    for block in [&block_fallback_1, &block_fallback_2] {
+        block_source_fallback
+            .local_blocks_cache
+            .lock()
+            .await
+            .load_scan_result(scan_result_from_single_block(block.1.clone()));
+    }
+
+    let (temp_dir, mut file) = setup_temp_dir_and_file()?;
+    writeln!(&mut file, "{}", serde_json::to_string(&block_hl_node_0)?)?;
+    let block_source = HlNodeBlockSource::new(
+        BlockSourceBoxed::new(Box::new(block_source_fallback)),
+        HlNodeBlockSourceArgs {
+            root: temp_dir.path().to_path_buf(),
+            fallback_threshold: threshold,
+        },
+        1000000,
+    )
+    .await;
+
+    assert_eq!(block_source.collect_block(1000000).await?, block_hl_node_0.1);
+
+    // hl-node stops writing: after the threshold, consecutive blocks come from the fallback
+    // without waiting for the threshold again before each one
+    tokio::time::sleep(threshold).await;
+    assert_eq!(block_source.collect_block(1000001).await?, block_fallback_1.1);
+    assert_eq!(block_source.collect_block(1000002).await?, block_fallback_2.1);
+
+    Ok(())
+}
+
 #[test]
 fn test_hourly_files_sort() -> eyre::Result<()> {
     let temp_dir = tempfile::tempdir()?;

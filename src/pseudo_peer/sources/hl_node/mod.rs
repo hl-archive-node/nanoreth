@@ -84,9 +84,10 @@ impl BlockSource for HlNodeBlockSource {
                 }
             }
 
+            // Only blocks from hl-node reset the timer: resetting it here too would limit the
+            // fallback to one block per `fallback_threshold`, so it could never catch up.
             let block = fallback.collect_block(height).await?;
             metrics.fetched_from_fallback.increment(1);
-            Self::update_last_fetch(last_local_fetch, height, now).await;
             Ok(block)
         })
     }
