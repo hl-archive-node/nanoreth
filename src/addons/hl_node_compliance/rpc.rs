@@ -731,18 +731,17 @@ fn system_tx_count_for_block<Eth: EthWrapper>(
     Ok(header.map(|header| header.extras.system_tx_count as usize))
 }
 
-/// Resolves `block_id` to a concrete block number plus its system tx count, so a tag such as
-/// `latest` can't move to the next block between counting system txs and fetching the tx.
+/// Resolves `block_id` to the hash of the block plus its system tx count, so the caller can do
+/// the lookup by hash: the count and the transaction then come from the same block, even if the
+/// tag (`latest`, ...) or the block at that height changes in between.
 /// Returns `None` if the header isn't available locally.
 fn resolve_block_for_index<Eth: EthWrapper>(
     eth_api: &Eth,
     block_id: BlockId,
-) -> Result<Option<(BlockNumberOrTag, usize)>, Eth::Error> {
+) -> Result<Option<(B256, usize)>, Eth::Error> {
     let provider = eth_api.provider();
-    let header = provider.header_by_id(block_id).map_err(Eth::Error::from_eth_err)?;
-    Ok(header.map(|header| {
-        (BlockNumberOrTag::Number(header.number()), header.extras.system_tx_count as usize)
-    }))
+    let header = provider.sealed_header_by_id(block_id).map_err(Eth::Error::from_eth_err)?;
+    Ok(header.map(|header| (header.hash(), header.extras.system_tx_count as usize)))
 }
 
 /// Maps a compliant (system txs hidden) index to the index in the full block, where the system
@@ -952,14 +951,14 @@ where
                 .instrument(engine_span!())
                 .await;
         }
-        let Some((number, system_tx_count)) =
+        let Some((hash, system_tx_count)) =
             resolve_block_for_index(&*self.eth_api, number.into())?
         else {
             return Ok(None);
         };
         let tx = self
             .eth_api
-            .transaction_by_block_number_and_index(number, full_block_index(index, system_tx_count))
+            .transaction_by_block_hash_and_index(hash, full_block_index(index, system_tx_count))
             .instrument(engine_span!())
             .await?;
         Ok(tx.map(|tx| adjust_transaction_index(tx, system_tx_count)))
@@ -997,18 +996,20 @@ where
         index: Index,
     ) -> RpcResult<Option<Bytes>> {
         trace!(target: "rpc::eth", ?number, ?index, "Serving eth_getRawTransactionByBlockNumberAndIndex");
-        let (number, index) = if is_hl_compliant(ext, self.default_compliant) {
-            let Some((number, system_tx_count)) =
-                resolve_block_for_index(&*self.eth_api, number.into())?
-            else {
-                return Ok(None);
-            };
-            (number, full_block_index(index, system_tx_count))
-        } else {
-            (number, index)
+        if !is_hl_compliant(ext, self.default_compliant) {
+            return self
+                .eth_api
+                .raw_transaction_by_block_number_and_index(number, index)
+                .instrument(engine_span!())
+                .await;
+        }
+        let Some((hash, system_tx_count)) =
+            resolve_block_for_index(&*self.eth_api, number.into())?
+        else {
+            return Ok(None);
         };
         self.eth_api
-            .raw_transaction_by_block_number_and_index(number, index)
+            .raw_transaction_by_block_hash_and_index(hash, full_block_index(index, system_tx_count))
             .instrument(engine_span!())
             .await
     }
