@@ -18,23 +18,23 @@ pub struct BlockSourceConfig {
 
 #[derive(Debug, Clone)]
 pub enum BlockSourceType {
-    S3Default { polling_interval: Duration },
-    S3 { bucket: String, polling_interval: Duration },
+    S3Default { polling_interval: Duration, concurrency: usize },
+    S3 { bucket: String, polling_interval: Duration, concurrency: usize },
     Local { path: PathBuf },
     Rpc { url: String, polling_interval: Duration },
 }
 
 impl BlockSourceConfig {
-    pub async fn s3_default(polling_interval: Duration) -> Self {
+    pub async fn s3_default(polling_interval: Duration, concurrency: usize) -> Self {
         Self {
-            source_type: BlockSourceType::S3Default { polling_interval },
+            source_type: BlockSourceType::S3Default { polling_interval, concurrency },
             block_source_from_node: None,
         }
     }
 
-    pub async fn s3(bucket: String, polling_interval: Duration) -> Self {
+    pub async fn s3(bucket: String, polling_interval: Duration, concurrency: usize) -> Self {
         Self {
-            source_type: BlockSourceType::S3 { bucket, polling_interval },
+            source_type: BlockSourceType::S3 { bucket, polling_interval, concurrency },
             block_source_from_node: None,
         }
     }
@@ -73,11 +73,12 @@ impl BlockSourceConfig {
 
     pub async fn create_block_source(&self, chain_spec: HlChainSpec) -> BlockSourceBoxed {
         match &self.source_type {
-            BlockSourceType::S3Default { polling_interval } => {
-                s3_block_source(chain_spec.official_s3_bucket(), *polling_interval).await
+            BlockSourceType::S3Default { polling_interval, concurrency } => {
+                s3_block_source(chain_spec.official_s3_bucket(), *polling_interval, *concurrency)
+                    .await
             }
-            BlockSourceType::S3 { bucket, polling_interval } => {
-                s3_block_source(bucket, *polling_interval).await
+            BlockSourceType::S3 { bucket, polling_interval, concurrency } => {
+                s3_block_source(bucket, *polling_interval, *concurrency).await
             }
             BlockSourceType::Local { path } => {
                 Arc::new(Box::new(LocalBlockSource::new(path.clone())))
@@ -121,9 +122,18 @@ impl BlockSourceConfig {
     }
 }
 
-async fn s3_block_source(bucket: impl AsRef<str>, polling_interval: Duration) -> BlockSourceBoxed {
+async fn s3_block_source(
+    bucket: impl AsRef<str>,
+    polling_interval: Duration,
+    concurrency: usize,
+) -> BlockSourceBoxed {
     let client = aws_sdk_s3::Client::new(
         &aws_config::defaults(BehaviorVersion::latest()).region("ap-northeast-1").load().await,
     );
-    Arc::new(Box::new(S3BlockSource::new(client, bucket.as_ref().to_string(), polling_interval)))
+    Arc::new(Box::new(S3BlockSource::new(
+        client,
+        bucket.as_ref().to_string(),
+        polling_interval,
+        concurrency,
+    )))
 }
