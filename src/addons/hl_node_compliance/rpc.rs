@@ -7,6 +7,9 @@
 //! For non-system transactions, we can just return the log as is, and the client will
 //! adjust the transaction index accordingly.
 
+// jsonrpsee's `#[rpc]` expansion adds `#[must_use]` to methods whose boxed future already is.
+#![allow(clippy::double_must_use)]
+
 use alloy_consensus::{
     BlockHeader, TxReceipt,
     transaction::{TransactionMeta, TxHashRef},
