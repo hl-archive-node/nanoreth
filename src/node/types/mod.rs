@@ -79,40 +79,26 @@ impl BlockAndReceipts {
     ///
     /// Splits system transactions and receipts from regular ones using
     /// the `system_tx_count` stored in the header extras.
-    pub fn from_db(block: HlBlock, receipts: Vec<EthereumReceipt>) -> Self {
+    pub fn from_db(block: HlBlock, receipts: Vec<EthereumReceipt>) -> eyre::Result<Self> {
         let system_tx_count = block.header.extras.system_tx_count as usize;
         let hash = alloy_primitives::Sealable::hash_slow(&block.header);
-        let all_txs = block.body.inner.transactions;
+        let mut all_txs = block.body.inner.transactions;
+        eyre::ensure!(
+            system_tx_count <= all_txs.len(),
+            "Block {hash} declares {system_tx_count} system transactions but contains {} transactions",
+            all_txs.len()
+        );
+        eyre::ensure!(
+            receipts.len() == all_txs.len(),
+            "Block {hash} contains {} transactions but {} receipts",
+            all_txs.len(),
+            receipts.len()
+        );
 
-        // Split system txs from regular txs
-        let (system_tx_list, regular_tx_list) =
-            if system_tx_count > 0 && system_tx_count <= all_txs.len() {
-                let (sys, reg) = all_txs
-                    .into_iter()
-                    .enumerate()
-                    .partition::<Vec<_>, _>(|(i, _)| *i < system_tx_count);
-                (
-                    sys.into_iter().map(|(_, tx)| tx).collect::<Vec<_>>(),
-                    reg.into_iter().map(|(_, tx)| tx).collect::<Vec<_>>(),
-                )
-            } else {
-                (vec![], all_txs)
-            };
-
-        // Split receipts
-        let (system_receipts, regular_receipts) =
-            if system_tx_count > 0 && system_tx_count <= receipts.len() {
-                let (sys, reg) = receipts
-                    .into_iter()
-                    .enumerate()
-                    .partition::<Vec<_>, _>(|(i, _)| *i < system_tx_count);
-                (
-                    sys.into_iter().map(|(_, r)| r).collect::<Vec<_>>(),
-                    reg.into_iter().map(|(_, r)| r).collect::<Vec<_>>(),
-                )
-            } else {
-                (vec![], receipts)
-            };
+        let regular_tx_list = all_txs.split_off(system_tx_count);
+        let system_tx_list = all_txs;
+        let mut system_receipts = receipts;
+        let regular_receipts = system_receipts.split_off(system_tx_count);
 
         // Convert system transactions
         let system_txs: Vec<SystemTx> = system_tx_list
@@ -145,13 +131,13 @@ impl BlockAndReceipts {
             },
         };
 
-        BlockAndReceipts {
+        Ok(BlockAndReceipts {
             block: EvmBlock::Reth115(sealed_block),
             receipts: legacy_receipts,
             system_txs,
             read_precompile_calls: block.body.read_precompile_calls.unwrap_or_default(),
             highest_precompile_address: block.body.highest_precompile_address,
-        }
+        })
     }
 
     pub fn hash(&self) -> B256 {

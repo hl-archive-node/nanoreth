@@ -23,7 +23,7 @@ use reth_node_ethereum::EthEngineTypes;
 use reth_payload_primitives::{BuiltPayload, EngineApiMessageVersion, PayloadTypes};
 use reth_primitives::NodePrimitives;
 use reth_primitives_traits::{AlloyBlockHeader, Block};
-use reth_provider::{BlockHashReader, BlockNumReader};
+use reth_provider::{BlockHashReader, BlockIdReader, BlockNumReader};
 use std::{
     future::Future,
     pin::Pin,
@@ -52,7 +52,7 @@ pub(crate) type IncomingBlock = (BlockMsg, PeerId);
 /// import outcomes via `to_network` channel.
 pub struct ImportService<Provider>
 where
-    Provider: BlockNumReader + Clone,
+    Provider: BlockIdReader + BlockNumReader + Clone,
 {
     /// The handle to communicate with the engine service
     engine: ConsensusEngineHandle<HlPayloadTypes>,
@@ -68,7 +68,7 @@ where
 
 impl<Provider> ImportService<Provider>
 where
-    Provider: BlockNumReader + Clone + 'static,
+    Provider: BlockIdReader + BlockNumReader + Clone + 'static,
 {
     /// Create a new block import service
     pub fn new(
@@ -119,11 +119,18 @@ where
         let (hash, number) = (sealed_block.hash(), sealed_block.number());
 
         Box::pin(async move {
-            let (head_block_hash, _) = consensus.canonical_head(hash, number).ok()?;
+            let (head_block_hash, current_hash) = consensus.canonical_head(hash, number).ok()?;
+            let head_number = if head_block_hash == current_hash {
+                consensus.provider.best_block_number().ok()?
+            } else {
+                number
+            };
+            let finalized_block_hash =
+                consensus.finalized_hash(head_block_hash, head_number).ok()?;
             let state = ForkchoiceState {
                 head_block_hash,
-                safe_block_hash: head_block_hash,
-                finalized_block_hash: head_block_hash,
+                safe_block_hash: finalized_block_hash,
+                finalized_block_hash,
             };
 
             match engine.fork_choice_updated(state, None, EngineApiMessageVersion::default()).await
@@ -154,7 +161,7 @@ where
 
 impl<Provider> Future for ImportService<Provider>
 where
-    Provider: BlockNumReader + BlockHashReader + Clone + 'static + Unpin,
+    Provider: BlockIdReader + BlockNumReader + BlockHashReader + Clone + 'static + Unpin,
 {
     type Output = Result<(), Box<dyn std::error::Error>>;
 
@@ -182,6 +189,7 @@ mod tests {
     use crate::{HlHeader, chainspec::hl::hl_mainnet};
 
     use super::*;
+    use alloy_eips::BlockNumHash;
     use alloy_primitives::{B256, U128};
     use alloy_rpc_types::engine::PayloadStatus;
     use reth_chainspec::ChainInfo;
@@ -189,7 +197,7 @@ mod tests {
     use reth_eth_wire::NewBlock;
     use reth_node_ethereum::EthEngineTypes;
     use reth_primitives::Block;
-    use reth_provider::ProviderError;
+    use reth_provider::{BlockIdReader, ProviderError, ProviderResult};
     use std::{
         sync::Arc,
         task::{Context, Poll},
@@ -245,6 +253,20 @@ mod tests {
 
     #[derive(Clone)]
     struct MockProvider;
+
+    impl BlockIdReader for MockProvider {
+        fn pending_block_num_hash(&self) -> ProviderResult<Option<BlockNumHash>> {
+            Ok(None)
+        }
+
+        fn safe_block_num_hash(&self) -> ProviderResult<Option<BlockNumHash>> {
+            Ok(None)
+        }
+
+        fn finalized_block_num_hash(&self) -> ProviderResult<Option<BlockNumHash>> {
+            Ok(None)
+        }
+    }
 
     impl BlockNumReader for MockProvider {
         fn chain_info(&self) -> Result<ChainInfo, ProviderError> {
@@ -306,7 +328,10 @@ mod tests {
     impl TestFixture {
         /// Create a new test fixture with the given engine responses
         async fn new(responses: EngineResponses) -> Self {
-            let consensus = Arc::new(HlConsensus { provider: MockProvider });
+            let consensus = Arc::new(HlConsensus {
+                provider: MockProvider,
+                finalization_policy: crate::consensus::FinalizationPolicy::Immediate,
+            });
             let (to_engine, from_engine) = mpsc::unbounded_channel();
             let engine_handle = ConsensusEngineHandle::new(to_engine);
             handle_engine_msg(from_engine, responses).await;

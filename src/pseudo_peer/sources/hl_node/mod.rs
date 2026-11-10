@@ -91,6 +91,14 @@ impl BlockSource for HlNodeBlockSource {
         })
     }
 
+    fn refresh_block(&self, height: u64) -> BoxFuture<'static, eyre::Result<BlockAndReceipts>> {
+        let this = self.clone();
+        Box::pin(async move {
+            this.local_blocks_cache.lock().await.remove_block(height);
+            this.collect_block(height).await
+        })
+    }
+
     fn find_latest_block_number(&self) -> BoxFuture<'static, Option<u64>> {
         let fallback = self.fallback.clone();
         let args = self.args.clone();

@@ -1,18 +1,67 @@
 // jsonrpsee's `#[rpc]` expansion adds `#[must_use]` to methods whose boxed future already is.
 #![allow(clippy::double_must_use)]
 
-use crate::node::types::BlockAndReceipts;
+use crate::{HlBlock, HlPrimitives, node::types::BlockAndReceipts};
 use alloy_primitives::Bytes;
 use jsonrpsee::proc_macros::rpc;
 use jsonrpsee_core::{RpcResult, async_trait};
 use reth::rpc::result::internal_rpc_err;
+use reth_ethereum_primitives::EthereumReceipt;
+use reth_provider::{
+    BlockNumReader, BlockReader, ProviderResult, ReceiptProvider,
+    providers::{BlockchainProvider, ConsistentProvider, ProviderNodeTypes},
+};
 use std::sync::OnceLock;
 use tracing::trace;
 
 /// Trait for reading blocks from the database for the sync server.
 pub trait SyncBlockReader: Send + Sync + 'static {
-    fn read_block_and_receipts(&self, number: u64) -> eyre::Result<BlockAndReceipts>;
+    fn read_blocks_and_receipts(&self, numbers: &[u64]) -> eyre::Result<Vec<BlockAndReceipts>>;
     fn best_block_number(&self) -> eyre::Result<u64>;
+}
+
+trait ConsistentSyncProvider: Send + Sync + 'static {
+    type Snapshot: SyncSnapshot;
+
+    fn consistent_snapshot(&self) -> ProviderResult<Self::Snapshot>;
+    fn last_block_number(&self) -> ProviderResult<u64>;
+}
+
+trait SyncSnapshot {
+    fn block_by_number(&self, number: u64) -> ProviderResult<Option<HlBlock>>;
+    fn receipts_by_block_number(&self, number: u64)
+    -> ProviderResult<Option<Vec<EthereumReceipt>>>;
+}
+
+impl<T> SyncSnapshot for T
+where
+    T: BlockReader<Block = HlBlock> + ReceiptProvider<Receipt = EthereumReceipt>,
+{
+    fn block_by_number(&self, number: u64) -> ProviderResult<Option<HlBlock>> {
+        BlockReader::block_by_number(self, number)
+    }
+
+    fn receipts_by_block_number(
+        &self,
+        number: u64,
+    ) -> ProviderResult<Option<Vec<EthereumReceipt>>> {
+        ReceiptProvider::receipts_by_block(self, number.into())
+    }
+}
+
+impl<N> ConsistentSyncProvider for BlockchainProvider<N>
+where
+    N: ProviderNodeTypes<Primitives = HlPrimitives> + 'static,
+{
+    type Snapshot = ConsistentProvider<N>;
+
+    fn consistent_snapshot(&self) -> ProviderResult<Self::Snapshot> {
+        self.consistent_provider()
+    }
+
+    fn last_block_number(&self) -> ProviderResult<u64> {
+        BlockNumReader::last_block_number(self)
+    }
 }
 
 /// Wraps any reth provider that implements the needed traits.
@@ -28,27 +77,108 @@ impl<P> ProviderSyncReader<P> {
 
 impl<P> SyncBlockReader for ProviderSyncReader<P>
 where
-    P: reth_provider::BlockReader<Block = crate::HlBlock>
-        + reth_provider::ReceiptProvider<Receipt = reth_ethereum_primitives::EthereumReceipt>
-        + reth_provider::BlockNumReader
-        + Send
-        + Sync
-        + 'static,
+    P: ConsistentSyncProvider,
 {
-    fn read_block_and_receipts(&self, number: u64) -> eyre::Result<BlockAndReceipts> {
-        let block = self
-            .provider
-            .block_by_number(number)?
-            .ok_or_else(|| eyre::eyre!("Block {number} not found in database"))?;
-        let receipts = self
-            .provider
-            .receipts_by_block(number.into())?
-            .ok_or_else(|| eyre::eyre!("Receipts for block {number} not found in database"))?;
-        Ok(BlockAndReceipts::from_db(block, receipts))
+    fn read_blocks_and_receipts(&self, numbers: &[u64]) -> eyre::Result<Vec<BlockAndReceipts>> {
+        let snapshot = self.provider.consistent_snapshot()?;
+        numbers
+            .iter()
+            .map(|&number| {
+                let block = snapshot
+                    .block_by_number(number)?
+                    .ok_or_else(|| eyre::eyre!("Block {number} not found in database"))?;
+                // The snapshot already pins one chain view, so a number lookup cannot mix forks.
+                // Hashing the header instead would miss genesis, whose stored hash is fixed.
+                let receipts = snapshot.receipts_by_block_number(number)?.ok_or_else(|| {
+                    eyre::eyre!("Receipts for block {number} not found in database")
+                })?;
+                BlockAndReceipts::from_db(block, receipts)
+            })
+            .collect()
     }
 
     fn best_block_number(&self) -> eyre::Result<u64> {
         Ok(self.provider.last_block_number()?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    struct MockProvider {
+        snapshots: Arc<AtomicUsize>,
+        receipt_numbers: Arc<Mutex<Vec<u64>>>,
+    }
+
+    struct MockSnapshot {
+        branch: u8,
+        receipt_numbers: Arc<Mutex<Vec<u64>>>,
+    }
+
+    impl SyncSnapshot for MockSnapshot {
+        fn block_by_number(&self, number: u64) -> ProviderResult<Option<HlBlock>> {
+            let mut block = HlBlock::default();
+            block.header.inner.number = number;
+            block.header.inner.extra_data = Bytes::from(vec![self.branch]);
+            Ok(Some(block))
+        }
+
+        fn receipts_by_block_number(
+            &self,
+            number: u64,
+        ) -> ProviderResult<Option<Vec<EthereumReceipt>>> {
+            self.receipt_numbers.lock().unwrap().push(number);
+            Ok(Some(vec![]))
+        }
+    }
+
+    impl ConsistentSyncProvider for MockProvider {
+        type Snapshot = MockSnapshot;
+
+        fn consistent_snapshot(&self) -> ProviderResult<Self::Snapshot> {
+            let branch = self.snapshots.fetch_add(1, Ordering::SeqCst) as u8;
+            Ok(MockSnapshot { branch, receipt_numbers: self.receipt_numbers.clone() })
+        }
+
+        fn last_block_number(&self) -> ProviderResult<u64> {
+            Ok(0)
+        }
+    }
+
+    #[test]
+    fn batch_reads_blocks_and_receipts_from_one_snapshot() {
+        let snapshots = Arc::new(AtomicUsize::new(0));
+        let receipt_numbers = Arc::new(Mutex::new(Vec::new()));
+        let reader = ProviderSyncReader::new(MockProvider {
+            snapshots: snapshots.clone(),
+            receipt_numbers: receipt_numbers.clone(),
+        });
+
+        let blocks = reader.read_blocks_and_receipts(&[10, 11]).unwrap();
+
+        assert_eq!(snapshots.load(Ordering::SeqCst), 1);
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(*receipt_numbers.lock().unwrap(), vec![10, 11]);
+    }
+
+    #[test]
+    fn separate_requests_may_observe_different_coherent_snapshots() {
+        let snapshots = Arc::new(AtomicUsize::new(0));
+        let reader = ProviderSyncReader::new(MockProvider {
+            snapshots: snapshots.clone(),
+            receipt_numbers: Arc::new(Mutex::new(Vec::new())),
+        });
+
+        let first = reader.read_blocks_and_receipts(&[10]).unwrap().remove(0);
+        let second = reader.read_blocks_and_receipts(&[10]).unwrap().remove(0);
+
+        assert_eq!(snapshots.load(Ordering::SeqCst), 2);
+        assert_ne!(first.hash(), second.hash());
     }
 }
 
@@ -96,8 +226,12 @@ impl HlSyncApiServer for HlSyncServer {
         trace!(target: "rpc::hl", height, "Serving hl_syncGetBlock");
         let reader = get_sync_db_reader()?;
         let block = reader
-            .read_block_and_receipts(height)
+            .read_blocks_and_receipts(&[height])
             .map_err(|e| internal_rpc_err(format!("Failed to read block {height}: {e}")))?;
+        let block = block
+            .into_iter()
+            .next()
+            .ok_or_else(|| internal_rpc_err(format!("No block returned for height {height}")))?;
 
         // Encode as msgpack + lz4 (same format as S3/local block sources).
         // Use write_named (map format) to match the S3/Go msgpack format.
@@ -116,10 +250,8 @@ impl HlSyncApiServer for HlSyncServer {
         trace!(target: "rpc::hl", count = heights.len(), "Serving hl_syncGetBlocks");
         let reader = get_sync_db_reader()?;
 
-        let blocks: Vec<BlockAndReceipts> = heights
-            .iter()
-            .map(|&h| reader.read_block_and_receipts(h))
-            .collect::<Result<_, _>>()
+        let blocks = reader
+            .read_blocks_and_receipts(heights)
             .map_err(|e| internal_rpc_err(format!("Failed to read blocks: {e}")))?;
 
         let mut encoder = lz4_flex::frame::FrameEncoder::new(Vec::new());
