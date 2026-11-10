@@ -45,6 +45,12 @@ pub struct HlNodeArgs {
     #[arg(long, env = "DEBUG_CUTOFF_HEIGHT")]
     pub debug_cutoff_height: Option<u64>,
 
+    /// Overrides the block number at which the HyperEVM MRB precompile accounting becomes active.
+    ///
+    /// Leave it unset to use the announced height (mainnet 50,988,232, testnet 69,259,950).
+    #[arg(long, env = "MRB_ACTIVATION_BLOCK")]
+    pub mrb_activation_block: Option<u64>,
+
     /// Upstream RPC URL to forward incoming transactions.
     ///
     /// Default to Hyperliquid's RPC URL when not provided (https://rpc.hyperliquid.xyz/evm).

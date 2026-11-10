@@ -3,9 +3,9 @@ use core::fmt;
 use super::{HlEthApi, HlRpcNodeCore};
 use crate::{
     HlBlock,
-    evm::transaction::HlTxEnvExt,
+    evm::{spec::HlSpecId, transaction::HlTxEnvExt},
     node::evm::{
-        apply_precompiles, apply_precompiles_with_forwarder,
+        apply_precompiles, apply_precompiles_with_forwarder, mrb,
         read_precompile_forwarder::read_precompile_forwarder,
     },
 };
@@ -43,6 +43,7 @@ where
         >,
     >,
     EthApiError: FromEvmError<N::Evm>,
+    SpecFor<N::Evm>: From<HlSpecId>,
     Rpc: RpcConvert<
             Primitives = N::Primitives,
             Error = EthApiError,
@@ -165,6 +166,9 @@ where
 
         if let Some(block_overrides) = overrides.block {
             apply_block_overrides(*block_overrides, db, &mut evm_env.block_env);
+            // Precompile prices follow the block number, so an overridden number picks its spec.
+            evm_env.cfg_env.spec =
+                mrb::spec_at(evm_env.cfg_env.chain_id, evm_env.block_env.number.to()).into();
         }
         if let Some(state_overrides) = overrides.state {
             apply_state_overrides(state_overrides, db)

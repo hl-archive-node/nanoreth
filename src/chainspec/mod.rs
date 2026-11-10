@@ -2,7 +2,7 @@ pub mod hl;
 pub mod parser;
 
 use crate::{
-    hardforks::HlHardforks,
+    hardforks::{HlHardforks, hl::HlHardfork},
     node::primitives::{HlHeader, header::HlHeaderExtras},
 };
 use alloy_eips::eip7840::BlobParams;
@@ -103,7 +103,18 @@ impl EthereumHardforks for HlChainSpec {
     }
 }
 
-impl HlHardforks for HlChainSpec {}
+impl HlHardforks for HlChainSpec {
+    fn hl_fork_activation(&self, fork: HlHardfork) -> ForkCondition {
+        match fork {
+            HlHardfork::V1 => ForkCondition::Block(0),
+            HlHardfork::V2 => {
+                crate::node::evm::mrb::activation_block_for_chain(self.inner.chain().id())
+                    .map(ForkCondition::Block)
+                    .unwrap_or(ForkCondition::Never)
+            }
+        }
+    }
+}
 
 impl EthExecutorSpec for HlChainSpec {
     fn deposit_contract_address(&self) -> Option<Address> {

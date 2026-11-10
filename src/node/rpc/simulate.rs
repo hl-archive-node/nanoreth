@@ -1,5 +1,9 @@
 use super::{HlEthApi, HlRpcNodeCore};
-use crate::{HlHeader, evm::transaction::HlTxEnvExt, node::evm::config::HlBlockExecutionCtx};
+use crate::{
+    HlHeader,
+    evm::{spec::HlSpecId, transaction::HlTxEnvExt},
+    node::evm::{config::HlBlockExecutionCtx, mrb},
+};
 use alloy_eips::BlockId;
 use alloy_evm::{
     EvmFactory,
@@ -35,6 +39,7 @@ where
             >,
         >,
     EthApiError: FromEvmError<N::Evm>,
+    SpecFor<N::Evm>: From<HlSpecId>,
     Rpc: RpcConvert<
             Primitives = N::Primitives,
             Error = EthApiError,
@@ -119,11 +124,12 @@ where
                             && gas_limit_override > evm_env.block_env.gas_limit
                             && gas_limit_override > this.call_gas_limit()
                         {
-                            return Err(EthApiError::other(
-                                EthSimulateError::GasLimitReached,
-                            ));
+                            return Err(EthApiError::other(EthSimulateError::GasLimitReached));
                         }
                         apply_block_overrides(block_overrides, &mut db, &mut evm_env.block_env);
+                        evm_env.cfg_env.spec =
+                            mrb::spec_at(evm_env.cfg_env.chain_id, evm_env.block_env.number.to())
+                                .into();
                     }
                     if let Some(state_overrides) = state_overrides {
                         apply_state_overrides(state_overrides, &mut db).map_err(

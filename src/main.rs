@@ -58,6 +58,19 @@ fn main() -> eyre::Result<()> {
             }
             spot_meta::add_spot_meta_overrides(spot_meta_overrides);
 
+            reth_hl::node::evm::mrb::set_activation_block(ext.mrb_activation_block)?;
+            let chain_id = reth_chainspec::EthChainSpec::chain(builder.config().chain.as_ref()).id();
+            let announced = reth_hl::node::evm::mrb::scheduled_activation_block(chain_id);
+            if let Some(height) = ext.mrb_activation_block
+                && Some(height) != announced
+            {
+                warn!(
+                    height,
+                    ?announced,
+                    "MRB activation block overridden; this node diverges from the announced schedule"
+                );
+            }
+
             let default_upstream_rpc_url = builder.config().chain.official_rpc_url();
 
             let enable_sync_server = ext.enable_sync_server;

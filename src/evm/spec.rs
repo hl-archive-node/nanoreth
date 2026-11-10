@@ -7,12 +7,14 @@ pub enum HlSpecId {
     /// Placeholder for evm cancun fork
     #[default]
     V1,
+    /// MRB precompile accounting and Osaka ModExp.
+    V2,
 }
 
 impl HlSpecId {
     pub const fn into_eth_spec(self) -> SpecId {
         match self {
-            Self::V1 => SpecId::CANCUN,
+            Self::V1 | Self::V2 => SpecId::CANCUN,
         }
     }
 }

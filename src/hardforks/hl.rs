@@ -13,5 +13,7 @@ hardfork!(
     HlHardfork {
         /// Initial version
         V1,
+        /// MRB precompile accounting and Osaka ModExp
+        V2,
     }
 );

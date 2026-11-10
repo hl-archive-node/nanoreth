@@ -1,5 +1,4 @@
-use super::ScopedReadPrecompileForwarder;
-use super::{executor::HlBlockExecutor, factory::HlEvmFactory};
+use super::{ScopedReadPrecompileForwarder, executor::HlBlockExecutor, factory::HlEvmFactory};
 use crate::{
     HlBlock, HlBlockBody, HlHeader, HlPrimitives,
     chainspec::HlChainSpec,
@@ -474,9 +473,89 @@ impl ConfigureEngineEvm<HlExecutionData> for HlEvmConfig {
 
 /// Map the latest active hardfork at the given timestamp or block number to a [`HlSpecId`].
 pub fn revm_spec_by_timestamp_and_block_number(
-    _chain_spec: impl HlHardforks,
+    chain_spec: impl HlHardforks,
     _timestamp: u64,
-    _block_number: u64,
+    block_number: u64,
 ) -> HlSpecId {
-    HlSpecId::V1
+    if chain_spec.is_hl_v2_active_at_block(block_number) { HlSpecId::V2 } else { HlSpecId::V1 }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        chainspec::parser::chain_value_parser,
+        node::evm::mrb::{self, TEST_ACTIVATION_BLOCK},
+    };
+    use alloy_primitives::{Address, Bytes, TxKind, address, bytes, hex};
+    use reth_evm::Evm;
+    use revm::{
+        bytecode::Bytecode,
+        database::{CacheDB, EmptyDB},
+        state::AccountInfo,
+    };
+
+    const CALLER: Address = address!("0x00000000000000000000000000000000000c0de1");
+    const VERIFIER: Address = address!("0x00000000000000000000000000000000000c0de2");
+
+    /// Copies calldata to memory, STATICCALLs ECRECOVER with a fixed 10,000 gas, and returns
+    /// the call's success flag as a 32-byte word.
+    const FIXED_GAS_ECRECOVER_CALLER: Bytes = bytes!("365f5f3760205f365f6001612710fa5f5260205ff3");
+
+    /// Runs the verifier in a block at `block_number`. Returns the inner ECRECOVER success flag
+    /// and the transaction's gas used.
+    fn run_at(block_number: u64) -> (bool, u64) {
+        let evm_config = HlEvmConfig::new(chain_value_parser("mainnet").unwrap());
+        let header = HlHeader {
+            inner: Header {
+                number: block_number,
+                gas_limit: 3_000_000,
+                excess_blob_gas: Some(0),
+                ..Default::default()
+            },
+            extras: Default::default(),
+        };
+        let env = evm_config.evm_env(&header).unwrap();
+
+        let mut db = CacheDB::new(EmptyDB::default());
+        db.insert_account_info(
+            VERIFIER,
+            AccountInfo {
+                code: Some(Bytecode::new_raw(FIXED_GAS_ECRECOVER_CALLER)),
+                ..Default::default()
+            },
+        );
+        let mut evm = evm_config.evm_factory().create_evm(db, env);
+        let input = hex!(
+            "456e9aea5e197a1f1af7a3e85a3212fa4049a3ba34c2289b4c860fc0b0c64ef3000000000000000000000000000000000000000000000000000000000000001c9242685bf161793cc25603c231bc2f568eb630ea16aa137d2664ac80388256084f8ae3bd7535248d0bd448298cc2e2071e56992d0774dc340c368ae950852ada"
+        );
+        let tx = TxEnv {
+            caller: CALLER,
+            kind: TxKind::Call(VERIFIER),
+            data: Bytes::copy_from_slice(&input),
+            gas_limit: 1_000_000,
+            chain_id: Some(evm_config.chain_spec().chain().id()),
+            ..Default::default()
+        };
+        let result = evm.transact(HlTxEnv::new(tx)).unwrap().result;
+        assert!(result.is_success(), "outer call must succeed: {result:?}");
+        let flag = result.output().unwrap();
+        (flag[31] == 1, result.gas_used())
+    }
+
+    #[test]
+    fn mrb_reprices_execution_exactly_from_the_activation_block() {
+        mrb::set_activation_block(Some(TEST_ACTIVATION_BLOCK)).unwrap();
+
+        let (before_ok, before_gas) = run_at(TEST_ACTIVATION_BLOCK - 1);
+        let (at_ok, at_gas) = run_at(TEST_ACTIVATION_BLOCK);
+        let (after_ok, _) = run_at(TEST_ACTIVATION_BLOCK + 1);
+
+        // 10,000 forwarded gas covers ECRECOVER at 3,000 but not at 5x = 15,000.
+        assert!(before_ok, "V1 block must still pay the old ECRECOVER price");
+        assert!(!at_ok, "the activation block itself must use the MRB price");
+        assert!(!after_ok);
+        // A failed precompile call consumes everything it was given.
+        assert_eq!(at_gas - before_gas, 10_000 - 3_000);
+    }
 }

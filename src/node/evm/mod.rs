@@ -29,6 +29,7 @@ mod assembler;
 pub mod config;
 mod executor;
 mod factory;
+pub mod mrb;
 mod patch;
 pub mod read_precompile_forwarder;
 pub mod receipt_builder;
@@ -101,7 +102,19 @@ where
         &mut self,
         tx: Self::Tx,
     ) -> Result<ResultAndState<Self::HaltReason>, Self::Error> {
-        if self.inspect { self.inner.inspect_tx(tx) } else { self.inner.transact(tx) }
+        // hl-node, like geth with `NoBaseFee`, executes zero gas price transactions (system txs)
+        // with a block base fee of zero, which is what the BASEFEE opcode observes.
+        let zero_fee = tx.base.gas_price == 0;
+        let basefee = self.ctx().block.basefee;
+        if zero_fee {
+            self.ctx_mut().block.basefee = 0;
+        }
+        let result =
+            if self.inspect { self.inner.inspect_tx(tx) } else { self.inner.transact(tx) };
+        if zero_fee {
+            self.ctx_mut().block.basefee = basefee;
+        }
+        result
     }
 
     fn transact_system_call(
