@@ -8,13 +8,12 @@ use crate::{
 };
 use alloy_eips::HashOrNumber;
 use alloy_primitives::U128;
-use alloy_rlp::Encodable;
 use rayon::prelude::*;
 use reth_eth_wire::{
     BlockBodies, BlockHeaders, GetBlockBodies, GetBlockHeaders, HeadersDirection, NewBlock,
 };
 use reth_network::{
-    eth_requests::{IncomingEthRequest, MAX_HEADERS_SERVE, SOFT_RESPONSE_LIMIT},
+    eth_requests::IncomingEthRequest,
     import::{BlockImport, BlockImportEvent, BlockValidation, NewBlockEvent},
     message::NewBlockMessage,
 };
@@ -220,10 +219,13 @@ impl PseudoPeer {
                     HashOrNumber::Number(number) => number,
                 };
 
+                // Serve the whole requested range. The only peer is this node's own downloader, which
+                // treats a shorter response as invalid and re-requests the same range forever, so
+                // the size caps reth applies to untrusted peers must not be copied here.
                 let step = skip as u64 + 1;
                 let mut next_number = Some(number);
-                let mut block_numbers = Vec::with_capacity((limit as usize).min(MAX_HEADERS_SERVE));
-                for _ in 0..limit.min(MAX_HEADERS_SERVE as u64) {
+                let mut block_numbers = Vec::new();
+                for _ in 0..limit {
                     let Some(block_number) = next_number else { break };
                     block_numbers.push(block_number);
                     next_number = match direction {
@@ -249,17 +251,7 @@ impl PseudoPeer {
                     })
                     .collect();
 
-                let mut total_bytes = 0;
-                let mut block_headers = Vec::with_capacity(encoded_headers.len());
-                for header in encoded_headers {
-                    total_bytes += header.length();
-                    block_headers.push(header);
-                    if total_bytes > SOFT_RESPONSE_LIMIT {
-                        break;
-                    }
-                }
-
-                let _ = response.send(Ok(BlockHeaders(block_headers)));
+                let _ = response.send(Ok(BlockHeaders(encoded_headers)));
             }
             IncomingEthRequest::GetBlockBodies { peer_id: _, request, response } => {
                 let GetBlockBodies(hashes) = request;
@@ -447,5 +439,62 @@ mod tests {
         // thousands.
         let collects = collects.load(Ordering::SeqCst);
         assert!(collects < 100, "source fetched {collects} times in 500ms");
+    }
+
+    /// Serves every requested height, each block with a distinct hash.
+    #[derive(Debug)]
+    struct NumberedSource;
+
+    impl BlockSource for NumberedSource {
+        fn collect_block(
+            &self,
+            height: u64,
+        ) -> futures::future::BoxFuture<'static, eyre::Result<BlockAndReceipts>> {
+            async move {
+                let mut block = test_utils::block(height, 1);
+                let crate::node::types::EvmBlock::Reth115(sealed) = &mut block.block;
+                sealed.header.hash =
+                    alloy_primitives::B256::from(alloy_primitives::U256::from(height));
+                Ok(block)
+            }
+            .boxed()
+        }
+
+        fn find_latest_block_number(&self) -> futures::future::BoxFuture<'static, Option<u64>> {
+            async { None }.boxed()
+        }
+
+        fn recommended_chunk_size(&self) -> u64 {
+            1000
+        }
+    }
+
+    #[tokio::test]
+    async fn header_request_is_served_in_full_above_reth_peer_limits() {
+        // Nanoreth's own downloader asks for up to `downloader_request_limit` headers at once
+        // (10000 in shipped configs); a shorter answer stalls header sync.
+        let source = Arc::new(Box::new(NumberedSource) as Box<dyn BlockSource>);
+        let store = Arc::new(BlockStore::new(source, None, TESTNET_CHAIN_ID));
+        let chain_spec = crate::chainspec::parser::chain_value_parser("testnet").unwrap();
+        let mut peer = PseudoPeer::new(chain_spec, store);
+        let (tx, rx) = tokio::sync::oneshot::channel();
+
+        peer.process_eth_request(IncomingEthRequest::GetBlockHeaders {
+            peer_id: PeerId::random(),
+            request: GetBlockHeaders {
+                start_block: HashOrNumber::Number(20_000),
+                limit: 10_000,
+                skip: 0,
+                direction: HeadersDirection::Falling,
+            },
+            response: tx,
+        })
+        .await
+        .unwrap();
+
+        let headers = rx.await.unwrap().unwrap().0;
+        assert_eq!(headers.len(), 10_000);
+        assert_eq!(headers.first().unwrap().number, 20_000);
+        assert_eq!(headers.last().unwrap().number, 10_001);
     }
 }
