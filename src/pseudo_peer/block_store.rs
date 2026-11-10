@@ -100,9 +100,36 @@ impl BlockStore {
         if self.canonical_hashes.read().get(&number).is_some_and(|old_hash| *old_hash != hash) {
             self.invalidate_above(number.saturating_sub(1));
         }
-        self.canonical_hashes.write().insert(number, hash);
-        self.blocks.write().insert(hash, block.clone());
+        {
+            let mut canonical_hashes = self.canonical_hashes.write();
+            canonical_hashes.insert(number, hash);
+            Self::insert_block(
+                &mut canonical_hashes,
+                &mut self.blocks.write(),
+                hash,
+                block.clone(),
+            );
+        }
         self.index_block(&block);
+    }
+
+    /// Inserts into the block LRU, dropping each evicted block's canonical entry so
+    /// `canonical_hashes` stays bounded by the block cache.
+    fn insert_block(
+        canonical_hashes: &mut BTreeMap<u64, B256>,
+        blocks: &mut LruMap<B256, BlockAndReceipts>,
+        hash: B256,
+        block: BlockAndReceipts,
+    ) {
+        if blocks.peek(&hash).is_none() {
+            while blocks.len() >= blocks.limiter().max_length() as usize {
+                let Some((evicted_hash, evicted)) = blocks.pop_oldest() else { break };
+                if canonical_hashes.get(&evicted.number()) == Some(&evicted_hash) {
+                    canonical_hashes.remove(&evicted.number());
+                }
+            }
+        }
+        blocks.insert(hash, block);
     }
 
     pub fn invalidate_above(&self, block: u64) {
@@ -195,7 +222,12 @@ impl BlockStore {
             } else {
                 canonical_hashes.insert(number, hash);
             }
-            self.blocks.write().insert(hash, block.clone());
+            Self::insert_block(
+                &mut canonical_hashes,
+                &mut self.blocks.write(),
+                hash,
+                block.clone(),
+            );
             self.index_block(&block);
         }
         Ok(block)
@@ -470,6 +502,23 @@ mod tests {
 
         assert_eq!(index.get_by_left(&child.hash()), Some(&42));
         assert_eq!(index.get_by_left(&parent_hash), Some(&41));
+    }
+
+    #[test]
+    fn canonical_hashes_are_bounded_by_the_block_cache() {
+        let source =
+            Arc::new(Box::new(MockSource(test_utils::block(0, 0))) as Box<dyn BlockSource>);
+        let store = BlockStore::new(source, None, 999);
+        *store.blocks.write() = LruMap::new(2);
+
+        for number in 1..=5 {
+            store.cache_block(test_utils::block(number, number as u8));
+        }
+
+        let canonical = store.canonical_hashes.read();
+        assert_eq!(canonical.keys().copied().collect::<Vec<_>>(), vec![4, 5]);
+        let mut blocks = store.blocks.write();
+        assert!(canonical.values().all(|hash| blocks.get(hash).is_some()));
     }
 
     #[tokio::test]
