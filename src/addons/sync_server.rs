@@ -1,3 +1,6 @@
+// jsonrpsee's `#[rpc]` expansion adds `#[must_use]` to methods whose boxed future already is.
+#![allow(clippy::double_must_use)]
+
 use crate::node::types::BlockAndReceipts;
 use alloy_primitives::Bytes;
 use jsonrpsee::proc_macros::rpc;
