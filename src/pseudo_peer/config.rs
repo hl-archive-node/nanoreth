@@ -7,8 +7,14 @@ use super::{
         LocalBlockSource, RpcBlockSource, S3BlockSource,
     },
 };
-use aws_config::BehaviorVersion;
+use aws_config::{BehaviorVersion, timeout::TimeoutConfig};
 use std::{env::home_dir, path::PathBuf, sync::Arc, time::Duration};
+
+/// Bounds each S3 request attempt up to the response headers. The SDK sets no read or
+/// operation timeout by default, so a request whose response never arrives waits forever
+/// and stalls the sequential block poller. A timed-out attempt is a transient error the
+/// SDK retries. Response bodies are bounded by the SDK's stalled-stream protection.
+const S3_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Debug, Clone)]
 pub struct BlockSourceConfig {
@@ -122,8 +128,13 @@ impl BlockSourceConfig {
 }
 
 async fn s3_block_source(bucket: impl AsRef<str>, polling_interval: Duration) -> BlockSourceBoxed {
-    let client = aws_sdk_s3::Client::new(
-        &aws_config::defaults(BehaviorVersion::latest()).region("ap-northeast-1").load().await,
-    );
+    let config = aws_config::defaults(BehaviorVersion::latest())
+        .region("ap-northeast-1")
+        .timeout_config(
+            TimeoutConfig::builder().operation_attempt_timeout(S3_ATTEMPT_TIMEOUT).build(),
+        )
+        .load()
+        .await;
+    let client = aws_sdk_s3::Client::new(&config);
     Arc::new(Box::new(S3BlockSource::new(client, bucket.as_ref().to_string(), polling_interval)))
 }
