@@ -147,6 +147,7 @@ where
                 sidecars: None,
                 read_precompile_calls: ctx.extras.read_precompile_calls.clone(),
                 highest_precompile_address: ctx.extras.highest_precompile_address,
+                system_tx_receipts_hash: None,
             },
         })
     }
@@ -412,6 +413,7 @@ where
             extras: HlExtras {
                 read_precompile_calls: block_body.read_precompile_calls.clone(),
                 highest_precompile_address: block_body.highest_precompile_address,
+                system_tx_receipts_hash: block_body.system_tx_receipts_hash,
             },
             read_precompile_forwarder: None,
         })
@@ -455,6 +457,7 @@ impl ConfigureEngineEvm<HlExecutionData> for HlEvmConfig {
             extras: HlExtras {
                 read_precompile_calls: block.body.read_precompile_calls.clone(),
                 highest_precompile_address: block.body.highest_precompile_address,
+                system_tx_receipts_hash: block.body.system_tx_receipts_hash,
             },
             read_precompile_forwarder: None,
         }

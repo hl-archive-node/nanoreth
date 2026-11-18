@@ -29,6 +29,7 @@ use reth_engine_primitives::ConsensusEngineHandle;
 use std::{marker::PhantomData, sync::Arc};
 use tokio::sync::{Mutex, oneshot};
 
+pub mod backfill;
 pub mod cli;
 pub mod consensus;
 pub mod engine;

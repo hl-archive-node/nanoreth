@@ -16,7 +16,7 @@ use reth_hl::{
     },
     chainspec::{HlChainSpec, parser::HlChainSpecParser},
     node::{
-        HlNode,
+        HlNode, backfill,
         cli::{Cli, HlNodeArgs},
         evm::read_precompile_forwarder::{ReadPrecompileForwarder, set_read_precompile_forwarder},
         rpc::precompile::{HlBlockPrecompileApiServer, HlBlockPrecompileExt},
@@ -24,6 +24,7 @@ use reth_hl::{
         storage::tables::Tables,
         types::set_spot_metadata_db,
     },
+    pseudo_peer::BlockSourceType,
 };
 use tracing::{info, warn};
 
@@ -86,8 +87,17 @@ fn main() -> eyre::Result<()> {
             // blocking RPC workers that precompiles run on.
             let runtime_handle = tokio::runtime::Handle::current();
 
+            let block_source_config = ext.block_source_args.parse().await?;
+            // Blocks rebuilt from a nanoreth database (`rpc://`) carry no system tx gas, so there
+            // is nothing to backfill from.
+            let backfill_source_config = block_source_config.clone().filter(|config| {
+                !ext.disable_system_receipts_backfill
+                    && !matches!(config.source_type, BlockSourceType::Rpc { .. })
+            });
+            let backfill_strict = ext.system_receipts_backfill_strict;
+            let backfill_threads = ext.system_receipts_backfill_threads;
             let (node, engine_handle_tx) = HlNode::new(
-                ext.block_source_args.parse().await?,
+                block_source_config,
                 ext.debug_cutoff_height,
                 ext.allow_network_overrides,
             );
@@ -246,6 +256,19 @@ fn main() -> eyre::Result<()> {
                 .await?;
 
             engine_handle_tx.send(node.beacon_engine_handle.clone()).unwrap();
+
+            if let Some(config) = backfill_source_config {
+                let chain_spec = node.chain_spec();
+                let source = config.create_block_source((*chain_spec).clone()).await;
+                backfill::spawn_on_node(
+                    node.provider.clone(),
+                    chain_spec,
+                    source,
+                    backfill_strict,
+                    backfill_threads,
+                    &node.task_executor,
+                )?;
+            }
 
             exit_future.await
         },

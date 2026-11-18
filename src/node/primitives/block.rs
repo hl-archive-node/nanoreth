@@ -43,6 +43,7 @@ impl Block for HlBlock {
             sidecars: body.sidecars.as_ref().map(Cow::Borrowed),
             read_precompile_calls: body.read_precompile_calls.as_ref().map(Cow::Borrowed),
             highest_precompile_address: body.highest_precompile_address.as_ref().map(Cow::Borrowed),
+            system_tx_receipts_hash: body.system_tx_receipts_hash,
         }
         .length()
     }

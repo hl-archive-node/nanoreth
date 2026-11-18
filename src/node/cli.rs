@@ -1,8 +1,11 @@
 use crate::{
     chainspec::{HlChainSpec, parser::HlChainSpecParser},
     node::{
-        HlNode, consensus::HlConsensus, evm::config::HlEvmConfig, migrate::Migrator,
-        spot_meta::init as spot_meta_init, storage::tables::Tables,
+        HlNode,
+        backfill::{BackfillSystemReceiptsCommand, SystemReceiptsChecksumsCommand},
+        consensus::HlConsensus,
+        evm::config::HlEvmConfig, migrate::Migrator, spot_meta::init as spot_meta_init,
+        storage::tables::Tables,
     },
     pseudo_peer::BlockSourceArgs,
 };
@@ -50,6 +53,27 @@ pub struct HlNodeArgs {
     /// Leave it unset to use the announced height (mainnet 50,988,232, testnet 69,259,950).
     #[arg(long, env = "MRB_ACTIVATION_BLOCK")]
     pub mrb_activation_block: Option<u64>,
+
+    /// Do not backfill the system tx receipts commitment of blocks imported before it existed.
+    ///
+    /// By default the node backfills them in the background once: blocks covered by the embedded
+    /// per-chunk checksums are re-executed locally, others fetch the commitment from the block
+    /// source and check it against a re-execution.
+    #[arg(long, env = "DISABLE_SYSTEM_RECEIPTS_BACKFILL")]
+    pub disable_system_receipts_backfill: bool,
+
+    /// Fetch every commitment of the system tx receipts backfill from the block source, instead
+    /// of re-executing locally the blocks covered by the embedded checksums.
+    #[arg(long = "system-receipts-backfill.strict", env = "SYSTEM_RECEIPTS_BACKFILL_STRICT")]
+    pub system_receipts_backfill_strict: bool,
+
+    /// Threads re-executing system txs in the system tx receipts backfill.
+    #[arg(
+        long = "system-receipts-backfill.threads",
+        env = "SYSTEM_RECEIPTS_BACKFILL_THREADS",
+        default_value_t = crate::node::backfill::DEFAULT_NODE_THREADS
+    )]
+    pub system_receipts_backfill_threads: usize,
 
     /// Upstream RPC URL to forward incoming transactions.
     ///
@@ -171,6 +195,19 @@ pub enum HlCommands<
     /// the next run. Useful after a bad fetch or to re-apply `--spot-meta.*` overrides.
     #[command(name = "clear-spot-meta")]
     ClearSpotMeta(ClearSpotMetaCommand<Spec>),
+
+    /// Backfill the block source's system tx receipts commitment of imported blocks.
+    ///
+    /// Blocks imported before the commitment existed are executed without checking their system
+    /// txs. This fetches the commitment from the block source, checks it against a re-execution of
+    /// the system txs, and stores it. The node must be stopped.
+    #[command(name = "backfill-system-receipts")]
+    BackfillSystemReceipts(BackfillSystemReceiptsCommand<Spec>),
+
+    /// Write the per-chunk checksums of the stored system tx receipts commitments that the
+    /// backfill embeds (release tooling).
+    #[command(name = "system-receipts-checksums", hide = true)]
+    SystemReceiptsChecksums(SystemReceiptsChecksumsCommand<Spec>),
 }
 
 impl<C: ChainSpecParser, Ext: clap::Args + fmt::Debug> HlCommands<C, Ext> {
@@ -179,6 +216,8 @@ impl<C: ChainSpecParser, Ext: clap::Args + fmt::Debug> HlCommands<C, Ext> {
         match self {
             Self::Reth(command) => command.chain_spec(),
             Self::ClearSpotMeta(command) => Some(&command.env.chain),
+            Self::BackfillSystemReceipts(command) => Some(command.chain()),
+            Self::SystemReceiptsChecksums(command) => Some(command.chain()),
         }
     }
 }
@@ -262,6 +301,10 @@ where
         let command = match self.command {
             HlCommands::Reth(command) => command,
             HlCommands::ClearSpotMeta(command) => return command.execute(),
+            HlCommands::BackfillSystemReceipts(command) => {
+                return runner.run_blocking_until_ctrl_c(command.execute());
+            }
+            HlCommands::SystemReceiptsChecksums(command) => return command.execute(),
         };
 
         match command {
