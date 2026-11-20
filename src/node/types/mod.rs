@@ -27,12 +27,58 @@ pub use reth_compat::{initialize_spot_metadata_cache, set_spot_metadata_db};
 pub struct HlExtras {
     pub read_precompile_calls: Option<ReadPrecompileCalls>,
     pub highest_precompile_address: Option<Address>,
+    /// See [`HlBlockBody::system_tx_receipts_hash`](crate::HlBlockBody). Last, and skipped when
+    /// absent, so rows written without it (and the `eth_blockPrecompileData` output) are
+    /// unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_tx_receipts_hash: Option<B256>,
+}
+
+/// Commitment to the outcome of a block's system txs, in execution order:
+/// `keccak256(rlp([[success, gas_used, logs], ...]))`.
+pub fn system_tx_receipts_hash<'a>(
+    outcomes: impl IntoIterator<Item = (bool, u64, &'a [Log])>,
+) -> B256 {
+    #[derive(RlpEncodable)]
+    struct Outcome {
+        success: bool,
+        gas_used: u64,
+        logs: Vec<Log>,
+    }
+    let outcomes: Vec<Outcome> = outcomes
+        .into_iter()
+        .map(|(success, gas_used, logs)| Outcome { success, gas_used, logs: logs.to_vec() })
+        .collect();
+    alloy_primitives::keccak256(alloy_rlp::encode(&outcomes))
+}
+
+impl LegacyReceipt {
+    /// [`system_tx_receipts_hash`] of a block source's system tx receipts.
+    ///
+    /// Source receipts carry the cumulative gas of the system txs, which strictly increases as no
+    /// system tx uses 0 gas. Receipts rebuilt from a nanoreth database carry 0 instead; then the
+    /// outcome is unknown and `None` is returned (as for a block without system txs).
+    pub(crate) fn system_tx_receipts_hash<'a>(
+        receipts: impl IntoIterator<Item = &'a LegacyReceipt>,
+    ) -> Option<B256> {
+        let mut prev = 0;
+        let mut outcomes = Vec::new();
+        for r in receipts {
+            if r.cumulative_gas_used <= prev {
+                return None;
+            }
+            outcomes.push((r.success, r.cumulative_gas_used - prev, r.logs.as_slice()));
+            prev = r.cumulative_gas_used;
+        }
+        (!outcomes.is_empty()).then(|| system_tx_receipts_hash(outcomes))
+    }
 }
 
 impl InMemorySize for HlExtras {
     fn size(&self) -> usize {
         self.read_precompile_calls.as_ref().map_or(0, |s| s.0.len()) +
-            self.highest_precompile_address.as_ref().map_or(0, |_| 20)
+            self.highest_precompile_address.as_ref().map_or(0, |_| 20) +
+            self.system_tx_receipts_hash.as_ref().map_or(0, |_| 32)
     }
 }
 
@@ -257,4 +303,39 @@ pub enum ReadPrecompileResult {
     OutOfGas,
     Error,
     UnexpectedError,
+}
+
+#[cfg(test)]
+mod system_tx_receipts_hash_tests {
+    use super::*;
+
+    fn receipt(success: bool, cumulative_gas_used: u64, logs: Vec<Log>) -> LegacyReceipt {
+        LegacyReceipt { tx_type: LegacyTxType::Legacy, success, cumulative_gas_used, logs }
+    }
+
+    #[test]
+    fn source_receipts_commit_to_per_tx_gas() {
+        let log =
+            Log::new_unchecked(Address::repeat_byte(1), vec![B256::repeat_byte(2)], Bytes::new());
+        let source = [receipt(true, 45_071, vec![log.clone()]), receipt(false, 90_142, vec![])];
+        let expected =
+            system_tx_receipts_hash([(true, 45_071, &[log][..]), (false, 45_071, &[][..])]);
+        assert_eq!(LegacyReceipt::system_tx_receipts_hash(&source), Some(expected));
+    }
+
+    #[test]
+    fn unknown_gas_or_no_system_txs_commit_to_nothing() {
+        // Receipts rebuilt from a nanoreth database carry no gas.
+        assert_eq!(LegacyReceipt::system_tx_receipts_hash(&[receipt(true, 0, vec![])]), None);
+        assert_eq!(LegacyReceipt::system_tx_receipts_hash(&[]), None);
+    }
+
+    #[test]
+    fn any_outcome_change_changes_the_hash() {
+        let base = system_tx_receipts_hash([(true, 21_000, &[][..])]);
+        assert_ne!(base, system_tx_receipts_hash([(false, 21_000, &[][..])]));
+        assert_ne!(base, system_tx_receipts_hash([(true, 21_001, &[][..])]));
+        let log = Log::new_unchecked(Address::ZERO, vec![], Bytes::from_static(&[1]));
+        assert_ne!(base, system_tx_receipts_hash([(true, 21_000, &[log][..])]));
+    }
 }

@@ -20,6 +20,22 @@ pub use s3::S3BlockSource;
 
 const DEFAULT_POLLING_INTERVAL: Duration = Duration::from_millis(25);
 
+/// Whether a [`BlockSource::collect_block`] error means the source does not have the block (a
+/// missing S3 object or local file), as opposed to a failure worth retrying.
+pub fn is_block_not_found(err: &eyre::Report) -> bool {
+    use aws_sdk_s3::{error::SdkError, operation::get_object::GetObjectError};
+    err.chain().any(|err| {
+        if let Some(err) = err.downcast_ref::<std::io::Error>() {
+            return err.kind() == std::io::ErrorKind::NotFound;
+        }
+        if let Some(err) = err.downcast_ref::<SdkError<GetObjectError>>() {
+            return err.as_service_error().is_some_and(GetObjectError::is_no_such_key) ||
+                err.raw_response().is_some_and(|response| response.status().as_u16() == 404);
+        }
+        false
+    })
+}
+
 /// Trait for block sources that can retrieve blocks from various sources
 #[auto_impl(&, &mut, Box, Arc)]
 pub trait BlockSource: Send + Sync + std::fmt::Debug + Unpin + 'static {
@@ -65,3 +81,22 @@ pub trait BlockSource: Send + Sync + std::fmt::Debug + Unpin + 'static {
 
 /// Type alias for a boxed block source
 pub type BlockSourceBoxed = Arc<Box<dyn BlockSource>>;
+
+#[cfg(test)]
+mod not_found_tests {
+    use super::is_block_not_found;
+    use eyre::WrapErr;
+
+    #[test]
+    fn missing_file_is_not_found_but_other_errors_are_not() {
+        let missing: eyre::Result<()> =
+            Err(std::io::Error::from(std::io::ErrorKind::NotFound)).wrap_err("Failed to read");
+        assert!(is_block_not_found(&missing.unwrap_err()));
+        let denied: eyre::Result<()> = Err(std::io::Error::from(
+            std::io::ErrorKind::PermissionDenied,
+        ))
+        .wrap_err("Failed to read");
+        assert!(!is_block_not_found(&denied.unwrap_err()));
+        assert!(!is_block_not_found(&eyre::eyre!("timeout")));
+    }
+}

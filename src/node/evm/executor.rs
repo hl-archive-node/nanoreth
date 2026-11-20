@@ -7,13 +7,13 @@ use crate::{
     hardforks::HlHardforks,
     node::{
         primitives::TransactionSigned,
-        types::{HlExtras, ReadPrecompileInput, ReadPrecompileResult},
+        types::{HlExtras, ReadPrecompileInput, ReadPrecompileResult, system_tx_receipts_hash},
     },
 };
 use alloy_consensus::{Transaction, TxReceipt};
 use alloy_eips::{Encodable2718, eip7685::Requests};
 use alloy_evm::{block::ExecutableTx, eth::receipt_builder::ReceiptBuilderCtx};
-use alloy_primitives::{Address, B256, Bytes, U160, U256, address, hex};
+use alloy_primitives::{Address, B256, Bytes, Log, U160, U256, address, hex};
 use reth_chainspec::{EthChainSpec, EthereumHardforks, Hardforks};
 use reth_evm::{
     Database, Evm, FromRecoveredTx, FromTxWithEncoded, IntoTxEnv, OnStateHook,
@@ -61,6 +61,9 @@ where
     /// Context for block execution.
     #[allow(dead_code)]
     ctx: HlBlockExecutionCtx<'a>,
+    /// Outcome `(success, gas_used, logs)` of each executed system tx, recorded only when there
+    /// is a commitment to check them against.
+    system_tx_outcomes: Vec<(bool, u64, Vec<Log>)>,
 }
 
 /// Replays a read precompile call from the calls recorded in the block body, or returns [`None`]
@@ -125,7 +128,15 @@ where
     /// Creates a new HlBlockExecutor.
     pub fn new(mut evm: EVM, ctx: HlBlockExecutionCtx<'a>, spec: Spec, receipt_builder: R) -> Self {
         apply_precompiles_with_forwarder(&mut evm, &ctx.extras, ctx.read_precompile_forwarder());
-        Self { spec, evm, gas_used: 0, receipts: vec![], receipt_builder, ctx }
+        Self {
+            spec,
+            evm,
+            gas_used: 0,
+            receipts: vec![],
+            receipt_builder,
+            ctx,
+            system_tx_outcomes: vec![],
+        }
     }
 
     fn deploy_corewriter_contract(&mut self) -> Result<(), BlockExecutionError> {
@@ -234,6 +245,13 @@ where
             &mut state,
         )?;
 
+        // The commitment covers the system txs the block source put at the start of the block.
+        if self.ctx.extras.system_tx_receipts_hash.is_some() &&
+            self.receipts.len() < self.ctx.system_tx_count
+        {
+            self.system_tx_outcomes.push((result.is_success(), gas_used, result.logs().to_vec()));
+        }
+
         // Push transaction changeset and calculate header bloom filter for receipt.
         self.receipts.push(self.receipt_builder.build_receipt(ReceiptBuilderCtx {
             tx: tx.tx(),
@@ -250,6 +268,25 @@ where
     }
 
     fn finish(self) -> Result<(Self::Evm, BlockExecutionResult<R::Receipt>), BlockExecutionError> {
+        // System tx receipts are not committed to by the header, so check them against the block
+        // source's commitment when it supplied one.
+        if let Some(expected) = self.ctx.extras.system_tx_receipts_hash {
+            let got = system_tx_receipts_hash(
+                self.system_tx_outcomes.iter().map(|(s, g, l)| (*s, *g, l.as_slice())),
+            );
+            if got != expected {
+                tracing::warn!(
+                    outcomes = ?self.system_tx_outcomes,
+                    %expected,
+                    %got,
+                    "system tx receipts mismatch"
+                );
+                return Err(BlockValidationError::msg(format!(
+                    "system tx receipts hash mismatch: got {got}, expected {expected}"
+                ))
+                .into());
+            }
+        }
         Ok((
             self.evm,
             BlockExecutionResult {

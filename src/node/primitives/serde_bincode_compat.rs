@@ -1,6 +1,6 @@
 #![allow(clippy::owned_cow)]
 use alloy_consensus::BlobTransactionSidecar;
-use alloy_primitives::Address;
+use alloy_primitives::{Address, B256};
 use reth_primitives_traits::serde_bincode_compat::{BincodeReprFor, SerdeBincodeCompat};
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
@@ -17,6 +17,7 @@ pub struct HlBlockBodyBincode<'a> {
     sidecars: Option<Cow<'a, Vec<BlobTransactionSidecar>>>,
     read_precompile_calls: Option<Cow<'a, ReadPrecompileCalls>>,
     highest_precompile_address: Option<Cow<'a, Address>>,
+    system_tx_receipts_hash: Option<B256>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -34,6 +35,7 @@ impl SerdeBincodeCompat for HlBlockBody {
             sidecars: self.sidecars.as_ref().map(Cow::Borrowed),
             read_precompile_calls: self.read_precompile_calls.as_ref().map(Cow::Borrowed),
             highest_precompile_address: self.highest_precompile_address.as_ref().map(Cow::Borrowed),
+            system_tx_receipts_hash: self.system_tx_receipts_hash,
         }
     }
 
@@ -43,12 +45,14 @@ impl SerdeBincodeCompat for HlBlockBody {
             sidecars,
             read_precompile_calls,
             highest_precompile_address,
+            system_tx_receipts_hash,
         } = repr;
         Self {
             inner: BlockBody::from_repr(inner),
             sidecars: sidecars.map(|s| s.into_owned()),
             read_precompile_calls: read_precompile_calls.map(|s| s.into_owned()),
             highest_precompile_address: highest_precompile_address.map(|s| s.into_owned()),
+            system_tx_receipts_hash,
         }
     }
 }

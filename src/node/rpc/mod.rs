@@ -383,6 +383,7 @@ where
             .map(|block| HlExtras {
                 read_precompile_calls: block.body.read_precompile_calls.clone(),
                 highest_precompile_address: block.body.highest_precompile_address,
+                system_tx_receipts_hash: None,
             })
             .unwrap_or_default())
     }
@@ -420,6 +421,7 @@ where
                     HlExtras {
                         read_precompile_calls: None,
                         highest_precompile_address: head.highest_precompile_address,
+                        system_tx_receipts_hash: None,
                     },
                     forwarder,
                 ))
@@ -452,6 +454,7 @@ where
             HlExtras {
                 read_precompile_calls: None,
                 highest_precompile_address: parent.highest_precompile_address,
+                system_tx_receipts_hash: None,
             },
             forwarder,
         ))

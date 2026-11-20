@@ -390,6 +390,7 @@ mod tests {
                 sidecars: None,
                 read_precompile_calls: None,
                 highest_precompile_address: None,
+                system_tx_receipts_hash: None,
             },
         };
         let new_block = HlNewBlock(NewBlock { block, td: U128::from(1) });

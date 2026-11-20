@@ -263,6 +263,9 @@ impl SealedBlock {
             sidecars: None,
             read_precompile_calls: Some(read_precompile_calls),
             highest_precompile_address,
+            system_tx_receipts_hash: super::LegacyReceipt::system_tx_receipts_hash(
+                system_txs.iter().filter_map(|tx| tx.receipt.as_ref()),
+            ),
         };
 
         let system_tx_count = system_txs.len() as u64;

@@ -3,7 +3,7 @@ use super::{HlBlock, HlBlockBody, TransactionSigned};
 use crate::{HlHeader, node::types::ReadPrecompileCalls};
 use alloy_consensus::{BlobTransactionSidecar, BlockBody};
 use alloy_eips::eip4895::Withdrawals;
-use alloy_primitives::Address;
+use alloy_primitives::{Address, B256};
 use alloy_rlp::{Decodable, Encodable, RlpDecodable, RlpEncodable};
 use std::borrow::Cow;
 
@@ -16,6 +16,7 @@ struct BlockBodyHelper<'a> {
     sidecars: Option<Cow<'a, Vec<BlobTransactionSidecar>>>,
     read_precompile_calls: Option<Cow<'a, ReadPrecompileCalls>>,
     highest_precompile_address: Option<Cow<'a, Address>>,
+    system_tx_receipts_hash: Option<B256>,
 }
 
 #[derive(RlpEncodable, RlpDecodable)]
@@ -28,6 +29,7 @@ pub(crate) struct BlockHelper<'a> {
     pub(crate) sidecars: Option<Cow<'a, Vec<BlobTransactionSidecar>>>,
     pub(crate) read_precompile_calls: Option<Cow<'a, ReadPrecompileCalls>>,
     pub(crate) highest_precompile_address: Option<Cow<'a, Address>>,
+    pub(crate) system_tx_receipts_hash: Option<B256>,
 }
 
 impl<'a> From<&'a HlBlockBody> for BlockBodyHelper<'a> {
@@ -37,6 +39,7 @@ impl<'a> From<&'a HlBlockBody> for BlockBodyHelper<'a> {
             sidecars,
             read_precompile_calls,
             highest_precompile_address,
+            system_tx_receipts_hash,
         } = value;
         Self {
             transactions: Cow::Borrowed(transactions),
@@ -45,6 +48,7 @@ impl<'a> From<&'a HlBlockBody> for BlockBodyHelper<'a> {
             sidecars: sidecars.as_ref().map(Cow::Borrowed),
             read_precompile_calls: read_precompile_calls.as_ref().map(Cow::Borrowed),
             highest_precompile_address: highest_precompile_address.as_ref().map(Cow::Borrowed),
+            system_tx_receipts_hash: *system_tx_receipts_hash,
         }
     }
 }
@@ -59,6 +63,7 @@ impl<'a> From<&'a HlBlock> for BlockHelper<'a> {
                     sidecars,
                     read_precompile_calls,
                     highest_precompile_address,
+                    system_tx_receipts_hash,
                 },
         } = value;
         Self {
@@ -69,6 +74,7 @@ impl<'a> From<&'a HlBlock> for BlockHelper<'a> {
             sidecars: sidecars.as_ref().map(Cow::Borrowed),
             read_precompile_calls: read_precompile_calls.as_ref().map(Cow::Borrowed),
             highest_precompile_address: highest_precompile_address.as_ref().map(Cow::Borrowed),
+            system_tx_receipts_hash: *system_tx_receipts_hash,
         }
     }
 }
@@ -91,6 +97,7 @@ impl Decodable for HlBlockBody {
             sidecars,
             read_precompile_calls,
             highest_precompile_address,
+            system_tx_receipts_hash,
         } = BlockBodyHelper::decode(buf)?;
         Ok(Self {
             inner: BlockBody {
@@ -101,6 +108,7 @@ impl Decodable for HlBlockBody {
             sidecars: sidecars.map(|s| s.into_owned()),
             read_precompile_calls: read_precompile_calls.map(|s| s.into_owned()),
             highest_precompile_address: highest_precompile_address.map(|s| s.into_owned()),
+            system_tx_receipts_hash,
         })
     }
 }
@@ -124,6 +132,7 @@ impl Decodable for HlBlock {
             sidecars,
             read_precompile_calls,
             highest_precompile_address,
+            system_tx_receipts_hash,
         } = BlockHelper::decode(buf)?;
         Ok(Self {
             header: header.into_owned(),
@@ -136,7 +145,31 @@ impl Decodable for HlBlock {
                 sidecars: sidecars.map(|s| s.into_owned()),
                 read_precompile_calls: read_precompile_calls.map(|s| s.into_owned()),
                 highest_precompile_address: highest_precompile_address.map(|s| s.into_owned()),
+                system_tx_receipts_hash,
             },
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn system_tx_receipts_hash_roundtrips() {
+        let body = HlBlockBody {
+            inner: BlockBody { transactions: vec![], ommers: vec![], withdrawals: None },
+            sidecars: None,
+            read_precompile_calls: Some(Default::default()),
+            highest_precompile_address: None,
+            system_tx_receipts_hash: Some(B256::repeat_byte(1)),
+        };
+        let encoded = alloy_rlp::encode(&body);
+        assert_eq!(HlBlockBody::decode(&mut encoded.as_slice()).unwrap(), body);
+
+        let block = HlBlock { header: Default::default(), body };
+        let encoded = alloy_rlp::encode(&block);
+        assert_eq!(encoded.len(), block.length());
+        assert_eq!(HlBlock::decode(&mut encoded.as_slice()).unwrap(), block);
     }
 }

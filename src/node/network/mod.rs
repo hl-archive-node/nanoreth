@@ -72,6 +72,7 @@ mod rlp {
         sidecars: Option<Cow<'a, Vec<BlobTransactionSidecar>>>,
         read_precompile_calls: Option<Cow<'a, ReadPrecompileCalls>>,
         highest_precompile_address: Option<Cow<'a, Address>>,
+        system_tx_receipts_hash: Option<alloy_primitives::B256>,
     }
 
     impl<'a> From<&'a HlNewBlock> for HlNewBlockHelper<'a> {
@@ -92,6 +93,7 @@ mod rlp {
                     .highest_precompile_address
                     .as_ref()
                     .map(Cow::Borrowed),
+                system_tx_receipts_hash: b.body.system_tx_receipts_hash,
             }
         }
     }
@@ -123,6 +125,7 @@ mod rlp {
                         highest_precompile_address: h
                             .highest_precompile_address
                             .map(|s| s.into_owned()),
+                        system_tx_receipts_hash: h.system_tx_receipts_hash,
                     },
                 },
                 td: h.td,
