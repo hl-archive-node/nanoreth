@@ -10,9 +10,10 @@
 //!   mismatch, or in strict mode) fetches each block's commitment from the block source, checks
 //!   it against a re-execution (unless disabled) and stores it when it matches.
 //!
-//! The node runs it in the background on start until it has covered every block imported before
-//! the first run ([`SystemReceiptsBackfill::run_to_completion`]); `reth-hl
-//! backfill-system-receipts` runs it offline.
+//! The node runs it in the background on start, from where the previous run left off up to the
+//! highest stored block ([`SystemReceiptsBackfill::run_to_completion`]), so a block imported
+//! without a commitment is covered by the next start. `reth-hl backfill-system-receipts` runs it
+//! offline. Both need the historical state, so a node with pruned history skips it.
 
 use crate::{
     HlBlock, HlHeader,
@@ -23,7 +24,7 @@ use crate::{
         storage::tables,
         types::{BlockAndReceipts, HlExtras, LegacyReceipt, system_tx_receipts_hash},
     },
-    pseudo_peer::{BlockSourceArgs, BlockSourceBoxed},
+    pseudo_peer::{BlockSourceArgs, BlockSourceBoxed, is_block_not_found},
 };
 use alloy_consensus::BlockHeader;
 use alloy_primitives::{B256, Bytes, Log, keccak256};
@@ -37,9 +38,10 @@ use reth_db_api::transaction::{DbTx, DbTxMut};
 use reth_evm::{ConfigureEvm, execute::BlockExecutor};
 use reth_provider::{
     BlockHashReader, BlockNumReader, BlockReader, ChainSpecProvider, DBProvider,
-    DatabaseProviderFactory, HeaderProvider, StageCheckpointReader, StageCheckpointWriter,
-    StateProviderFactory, TransactionVariant, providers::BlockchainProvider,
+    DatabaseProviderFactory, HeaderProvider, PruneCheckpointReader, StageCheckpointReader,
+    StageCheckpointWriter, StateProviderFactory, TransactionVariant, providers::BlockchainProvider,
 };
+use reth_prune_types::PruneSegment;
 use reth_revm::{State, database::StateProviderDatabase};
 use reth_stages_types::{StageCheckpoint, StageId};
 use std::{
@@ -50,13 +52,11 @@ use std::{
     },
     time::Duration,
 };
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
-/// Last block the backfill has covered.
+/// Last block up to which the backfill has covered every block: each has a commitment, or the
+/// block source does not have one for it.
 const PROGRESS: StageId = StageId::Other("SystemReceiptsBackfill");
-/// Last block imported before the first backfill run; later blocks get their commitment at
-/// import.
-const TARGET: StageId = StageId::Other("SystemReceiptsBackfillTarget");
 
 /// Blocks per chunk: per database transaction, and per checksum of the embedded tables. Chunk
 /// `i` is `i * CHUNK..=(i + 1) * CHUNK - 1`.
@@ -77,7 +77,8 @@ pub trait BackfillProvider:
                       + BlockNumReader
                       + HeaderProvider<Header = HlHeader>
                       + BlockReader<Block = HlBlock>
-                      + StageCheckpointReader,
+                      + StageCheckpointReader
+                      + PruneCheckpointReader,
         ProviderRW: DBProvider<Tx: DbTxMut> + BlockHashReader + StageCheckpointWriter,
     > + StateProviderFactory
     + Clone
@@ -93,7 +94,8 @@ impl<T> BackfillProvider for T where
                           + BlockNumReader
                           + HeaderProvider<Header = HlHeader>
                           + BlockReader<Block = HlBlock>
-                          + StageCheckpointReader,
+                          + StageCheckpointReader
+                          + PruneCheckpointReader,
             ProviderRW: DBProvider<Tx: DbTxMut> + BlockHashReader + StageCheckpointWriter,
         > + StateProviderFactory
         + Clone
@@ -190,6 +192,9 @@ impl Checksums {
 struct Stats {
     written: u64,
     present: u64,
+    /// Blocks the block source has no commitment for: missing, or without usable receipts.
+    not_in_source: u64,
+    /// Blocks that failed to fetch, retried by the next run.
     unavailable: u64,
     /// Chunks backfilled from the embedded checksums.
     local_chunks: u64,
@@ -232,49 +237,71 @@ impl<P: BackfillProvider> SystemReceiptsBackfill<P> {
         self
     }
 
-    /// Stores fetched commitments without re-executing the system txs first.
+    /// Stores fetched commitments without re-executing the system txs first, which needs no
+    /// historical state. Every commitment is then fetched, as the embedded checksums are checked
+    /// against a re-execution.
     pub fn without_verification(mut self) -> Self {
         self.verify = false;
+        self.checksums = Default::default();
         self
     }
 
-    /// Backfills every block imported before the first run, resuming from the stored progress.
-    /// Returns immediately when that is done, or the database was empty at the first run.
+    /// Whether the historical state the re-execution needs has been pruned.
+    pub fn history_pruned(&self) -> eyre::Result<bool> {
+        let provider = self.provider.database_provider_ro()?;
+        for segment in [PruneSegment::AccountHistory, PruneSegment::StorageHistory] {
+            if provider.get_prune_checkpoint(segment)?.is_some() {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// Backfills every stored block from the stored progress on. Blocks the run could not cover
+    /// (failed fetches, mismatches) hold the progress back, so the next run retries them.
     pub async fn run_to_completion(&self) -> eyre::Result<()> {
-        let (progress, target) = self
+        let (progress, best) = self
             .blocking(|this| {
                 let provider = this.provider.database_provider_ro()?;
                 let progress = provider.get_stage_checkpoint(PROGRESS)?.map(|c| c.block_number);
-                if let Some(target) = provider.get_stage_checkpoint(TARGET)? {
-                    return Ok((progress.unwrap_or(0), target.block_number));
-                }
-                let target = provider.best_block_number()?;
-                drop(provider);
-                let provider = this.provider.database_provider_rw()?;
-                provider.save_stage_checkpoint(TARGET, StageCheckpoint::new(target))?;
-                provider.commit()?;
-                Ok((progress.unwrap_or(0), target))
+                Ok((progress.unwrap_or(0), provider.best_block_number()?))
             })
             .await?;
-        if progress >= target {
+        if progress >= best {
             return Ok(());
         }
-        info!(from = progress + 1, to = target, "Backfilling system tx receipts commitments");
-        self.run(progress + 1, target, true).await
+        info!(from = progress + 1, to = best, "Backfilling system tx receipts commitments");
+        self.run(progress + 1, best, true).await
     }
 
-    /// Backfills `from..=to`. With `track_progress`, the progress is saved with every chunk.
+    /// Backfills `from..=to`. With `track_progress`, the progress is saved after every chunk, as
+    /// long as every block up to it is covered.
     pub async fn run(&self, from: u64, to: u64, track_progress: bool) -> eyre::Result<()> {
+        eyre::ensure!(
+            !self.verify || !self.history_pruned()?,
+            "the historical state is pruned, so commitments cannot be checked against a \
+             re-execution (use --no-verify to store them unchecked)"
+        );
         let mut stats = Stats::default();
+        let mut covered = true;
         let mut start = from;
         while start <= to {
             let end = ((start / CHUNK + 1) * CHUNK - 1).min(to);
-            self.run_chunk(start, end, track_progress.then_some(end), &mut stats).await?;
+            covered &= self.run_chunk(start, end, &mut stats).await?;
+            if track_progress && covered {
+                self.blocking(move |this| {
+                    let provider = this.provider.database_provider_rw()?;
+                    provider.save_stage_checkpoint(PROGRESS, StageCheckpoint::new(end))?;
+                    Ok(provider.commit()?)
+                })
+                .await?;
+            }
             info!(
                 block = end,
                 to,
                 written = stats.written,
                 already_present = stats.present,
+                not_in_source = stats.not_in_source,
                 unavailable = stats.unavailable,
                 local_chunks = stats.local_chunks,
                 mismatches = stats.mismatches.len(),
@@ -292,22 +319,16 @@ impl<P: BackfillProvider> SystemReceiptsBackfill<P> {
         Ok(())
     }
 
-    async fn run_chunk(
-        &self,
-        start: u64,
-        end: u64,
-        progress: Option<u64>,
-        stats: &mut Stats,
-    ) -> eyre::Result<()> {
+    /// Backfills the chunk `start..=end`. Returns whether every block of it is covered.
+    async fn run_chunk(&self, start: u64, end: u64, stats: &mut Stats) -> eyre::Result<bool> {
         if let Some(checksum) = self.checksums.get(start, end) {
-            let local =
-                self.blocking(move |this| this.backfill_locally(start, end, checksum, progress));
+            let local = self.blocking(move |this| this.backfill_locally(start, end, checksum));
             match local.await? {
                 Some((written, present)) => {
                     stats.written += written;
                     stats.present += present;
                     stats.local_chunks += 1;
-                    return Ok(());
+                    return Ok(true);
                 }
                 None => warn!(start, end, "System tx receipts checksum mismatch, fetching instead"),
             }
@@ -325,31 +346,39 @@ impl<P: BackfillProvider> SystemReceiptsBackfill<P> {
             .collect()
             .await;
 
+        let mut covered = true;
         let mut expected = Vec::with_capacity(candidates.len());
         for (candidate, block) in candidates.into_iter().zip(blocks) {
             let number = candidate.0;
             let block = match block {
                 Ok(block) => block,
+                Err(err) if is_block_not_found(&err) => {
+                    debug!(number, %err, "Block not in the block source");
+                    stats.not_in_source += 1;
+                    continue;
+                }
                 Err(err) => {
-                    warn!(number, %err, "Block not available from the block source");
+                    warn!(number, %err, "Failed to fetch block, retrying on the next run");
                     stats.unavailable += 1;
+                    covered = false;
                     continue;
                 }
             };
             match source_commitment(&block, candidate) {
                 Some(hash) => expected.push((candidate, hash)),
                 None => {
-                    warn!(number, "Block source has no usable system tx receipts for the block");
-                    stats.unavailable += 1;
+                    debug!(number, "Block source has no usable system tx receipts for the block");
+                    stats.not_in_source += 1;
                 }
             }
         }
 
         let (written, mismatches) =
-            self.blocking(move |this| this.verify_and_write(expected, progress)).await?;
+            self.blocking(move |this| this.verify_and_write(expected)).await?;
         stats.written += written;
+        covered &= mismatches.is_empty();
         stats.mismatches.extend(mismatches);
-        Ok(())
+        Ok(covered)
     }
 
     /// Blocks in `start..=end` with system txs, with their stored commitment if any.
@@ -391,7 +420,6 @@ impl<P: BackfillProvider> SystemReceiptsBackfill<P> {
         start: u64,
         end: u64,
         checksum: B256,
-        progress: Option<u64>,
     ) -> eyre::Result<Option<(u64, u64)>> {
         let blocks = self.system_tx_blocks(start, end)?;
         let commitments: Vec<B256> = self.pool.install(|| {
@@ -415,16 +443,12 @@ impl<P: BackfillProvider> SystemReceiptsBackfill<P> {
             .zip(commitments)
             .filter(|((_, stored), _)| stored.is_none())
             .map(|((candidate, _), commitment)| (candidate, commitment));
-        Ok(Some((self.write(missing, progress)?, present)))
+        Ok(Some((self.write(missing)?, present)))
     }
 
     /// Checks each fetched commitment against a re-execution (unless disabled) and stores the
     /// matching ones. Returns the number of commitments written and the mismatching blocks.
-    fn verify_and_write(
-        &self,
-        blocks: Vec<(Candidate, B256)>,
-        progress: Option<u64>,
-    ) -> eyre::Result<(u64, Vec<u64>)> {
+    fn verify_and_write(&self, blocks: Vec<(Candidate, B256)>) -> eyre::Result<(u64, Vec<u64>)> {
         let executed: Vec<Option<B256>> = self.pool.install(|| {
             blocks
                 .par_iter()
@@ -445,15 +469,11 @@ impl<P: BackfillProvider> SystemReceiptsBackfill<P> {
             Some((candidate, expected))
         });
         let matching: Vec<_> = matching.collect();
-        Ok((self.write(matching, progress)?, mismatches))
+        Ok((self.write(matching)?, mismatches))
     }
 
-    /// Stores commitments of blocks that are still canonical, and the progress if given.
-    fn write(
-        &self,
-        commitments: impl IntoIterator<Item = (Candidate, B256)>,
-        progress: Option<u64>,
-    ) -> eyre::Result<u64> {
+    /// Stores commitments of blocks that are still canonical.
+    fn write(&self, commitments: impl IntoIterator<Item = (Candidate, B256)>) -> eyre::Result<u64> {
         let provider = self.provider.database_provider_rw()?;
         let tx = provider.tx_ref();
         let mut written = 0;
@@ -469,9 +489,6 @@ impl<P: BackfillProvider> SystemReceiptsBackfill<P> {
                 Bytes::from(rmp_serde::to_vec(&extras)?),
             )?;
             written += 1;
-        }
-        if let Some(progress) = progress {
-            provider.save_stage_checkpoint(PROGRESS, StageCheckpoint::new(progress))?;
         }
         provider.commit()?;
         Ok(written)
@@ -528,12 +545,14 @@ fn execute_system_txs<P: BackfillProvider>(
     Ok(system_tx_receipts_hash(outcomes.iter().map(|(s, g, l)| (*s, *g, l.as_slice()))))
 }
 
-/// Fetches a block from the block source, retrying transient failures (e.g. S3 throttling).
+/// Fetches a block from the block source, retrying transient failures (e.g. S3 throttling) but
+/// not a block the source does not have.
 async fn fetch(source: BlockSourceBoxed, number: u64) -> eyre::Result<BlockAndReceipts> {
     let mut delay = Duration::from_secs(1);
     for _ in 0..FETCH_RETRIES {
         match source.collect_block(number).await {
             Ok(block) => return Ok(block),
+            Err(err) if is_block_not_found(&err) => return Err(err),
             Err(err) => warn!(number, %err, ?delay, "Failed to fetch block, retrying"),
         }
         tokio::time::sleep(delay).await;
@@ -588,7 +607,8 @@ pub struct BackfillSystemReceiptsCommand<C: ChainSpecParser> {
     strict: bool,
 
     /// Store fetched commitments without re-executing the system txs first. For pruned nodes,
-    /// which lack the historical state.
+    /// which lack the historical state. Fetches every commitment, also for chunks covered by the
+    /// embedded checksums.
     #[arg(long)]
     no_verify: bool,
 }
@@ -775,17 +795,24 @@ where
 }
 
 /// Starts the backfill in the background of a running node, see [`SystemReceiptsBackfill`].
+/// Skipped when the node prunes its history (`history_pruned`), which the backfill re-executes
+/// blocks on: such a node only checks the blocks it imports.
 pub fn spawn_on_node<P: BackfillProvider>(
     provider: P,
     chain_spec: Arc<HlChainSpec>,
     source: BlockSourceBoxed,
     strict: bool,
     threads: usize,
+    history_pruned: bool,
     executor: &reth::tasks::TaskExecutor,
 ) -> eyre::Result<()> {
     let mut backfill = SystemReceiptsBackfill::new(provider, chain_spec, source, threads)?;
     if strict {
         backfill = backfill.strict();
+    }
+    if history_pruned || backfill.history_pruned()? {
+        info!("History is pruned, skipping the system tx receipts backfill");
+        return Ok(());
     }
     executor.spawn(Box::pin(async move {
         if let Err(err) = backfill.run_to_completion().await {

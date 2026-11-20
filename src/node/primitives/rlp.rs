@@ -150,3 +150,26 @@ impl Decodable for HlBlock {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn system_tx_receipts_hash_roundtrips() {
+        let body = HlBlockBody {
+            inner: BlockBody { transactions: vec![], ommers: vec![], withdrawals: None },
+            sidecars: None,
+            read_precompile_calls: Some(Default::default()),
+            highest_precompile_address: None,
+            system_tx_receipts_hash: Some(B256::repeat_byte(1)),
+        };
+        let encoded = alloy_rlp::encode(&body);
+        assert_eq!(HlBlockBody::decode(&mut encoded.as_slice()).unwrap(), body);
+
+        let block = HlBlock { header: Default::default(), body };
+        let encoded = alloy_rlp::encode(&block);
+        assert_eq!(encoded.len(), block.length());
+        assert_eq!(HlBlock::decode(&mut encoded.as_slice()).unwrap(), block);
+    }
+}

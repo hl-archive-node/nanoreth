@@ -266,6 +266,10 @@ fn main() -> eyre::Result<()> {
                     source,
                     backfill_strict,
                     backfill_threads,
+                    node.config.prune_config().is_some_and(|config| {
+                        config.segments.account_history.is_some() ||
+                            config.segments.storage_history.is_some()
+                    }),
                     &node.task_executor,
                 )?;
             }

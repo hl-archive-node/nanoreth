@@ -61,7 +61,8 @@ where
     /// Context for block execution.
     #[allow(dead_code)]
     ctx: HlBlockExecutionCtx<'a>,
-    /// Outcome `(success, gas_used, logs)` of each executed system tx.
+    /// Outcome `(success, gas_used, logs)` of each executed system tx, recorded only when there
+    /// is a commitment to check them against.
     system_tx_outcomes: Vec<(bool, u64, Vec<Log>)>,
 }
 
@@ -244,7 +245,10 @@ where
             &mut state,
         )?;
 
-        if is_system_transaction(tx.tx()) {
+        // The commitment covers the system txs the block source put at the start of the block.
+        if self.ctx.extras.system_tx_receipts_hash.is_some() &&
+            self.receipts.len() < self.ctx.system_tx_count
+        {
             self.system_tx_outcomes.push((result.is_success(), gas_used, result.logs().to_vec()));
         }
 

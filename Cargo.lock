@@ -9403,6 +9403,7 @@ dependencies = [
  "reth-primitives",
  "reth-primitives-traits",
  "reth-provider",
+ "reth-prune-types",
  "reth-revm",
  "reth-rpc",
  "reth-rpc-builder",

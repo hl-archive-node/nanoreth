@@ -63,6 +63,7 @@ reth-trie-db = { git = "https://github.com/hl-archive-node/reth", rev = "1450962
 reth-codecs = { git = "https://github.com/hl-archive-node/reth", rev = "14509628ed37e9a9b7110ea855a67f427c4d61fc" }
 reth-transaction-pool = { git = "https://github.com/hl-archive-node/reth", rev = "14509628ed37e9a9b7110ea855a67f427c4d61fc" }
 reth-stages-types = { git = "https://github.com/hl-archive-node/reth", rev = "14509628ed37e9a9b7110ea855a67f427c4d61fc" }
+reth-prune-types = { git = "https://github.com/hl-archive-node/reth", rev = "14509628ed37e9a9b7110ea855a67f427c4d61fc" }
 reth-storage-api = { git = "https://github.com/hl-archive-node/reth", rev = "14509628ed37e9a9b7110ea855a67f427c4d61fc" }
 reth-errors = { git = "https://github.com/hl-archive-node/reth", rev = "14509628ed37e9a9b7110ea855a67f427c4d61fc" }
 reth-rpc-convert = { git = "https://github.com/hl-archive-node/reth", rev = "14509628ed37e9a9b7110ea855a67f427c4d61fc" }
