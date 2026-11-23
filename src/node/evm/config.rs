@@ -147,6 +147,7 @@ where
                 sidecars: None,
                 read_precompile_calls: ctx.extras.read_precompile_calls.clone(),
                 highest_precompile_address: ctx.extras.highest_precompile_address,
+                system_tx_receipts_hash: None,
             },
         })
     }
@@ -242,6 +243,8 @@ pub struct HlBlockExecutionCtx<'a> {
     /// Executing a real block must leave it `None`: there the recorded calls are consensus data,
     /// and an input missing from them means the block itself is wrong.
     read_precompile_forwarder: Option<ScopedReadPrecompileForwarder>,
+    /// System txs at the start of the block, the ones `extras.system_tx_receipts_hash` commits to.
+    pub(super) system_tx_count: usize,
 }
 
 impl HlBlockExecutionCtx<'_> {
@@ -412,8 +415,10 @@ where
             extras: HlExtras {
                 read_precompile_calls: block_body.read_precompile_calls.clone(),
                 highest_precompile_address: block_body.highest_precompile_address,
+                system_tx_receipts_hash: block_body.system_tx_receipts_hash,
             },
             read_precompile_forwarder: None,
+            system_tx_count: block.header().extras.system_tx_count as usize,
         })
     }
 
@@ -434,6 +439,7 @@ where
             // forwarder; see `HlEthApi::simulate_v1`.
             extras: HlExtras::default(),
             read_precompile_forwarder: None,
+            system_tx_count: 0,
         })
     }
 }
@@ -455,8 +461,10 @@ impl ConfigureEngineEvm<HlExecutionData> for HlEvmConfig {
             extras: HlExtras {
                 read_precompile_calls: block.body.read_precompile_calls.clone(),
                 highest_precompile_address: block.body.highest_precompile_address,
+                system_tx_receipts_hash: block.body.system_tx_receipts_hash,
             },
             read_precompile_forwarder: None,
+            system_tx_count: block.header.extras.system_tx_count as usize,
         }
     }
 

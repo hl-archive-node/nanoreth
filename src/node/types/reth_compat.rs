@@ -263,6 +263,9 @@ impl SealedBlock {
             sidecars: None,
             read_precompile_calls: Some(read_precompile_calls),
             highest_precompile_address,
+            system_tx_receipts_hash: LegacyReceipt::system_tx_receipts_hash(
+                system_txs.iter().filter_map(|tx| tx.receipt.as_ref()),
+            ),
         };
 
         let system_tx_count = system_txs.len() as u64;
@@ -280,7 +283,7 @@ impl SealedBlock {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::chainspec::TESTNET_CHAIN_ID;
+    use crate::{chainspec::TESTNET_CHAIN_ID, node::types::BlockAndReceipts};
     use alloy_consensus::{Transaction as _, TxType};
     use alloy_primitives::{Log, LogData, address, b256};
     use reth_ethereum_primitives::EthereumReceipt;
@@ -404,8 +407,7 @@ mod tests {
 
     #[test]
     fn from_db_accepts_empty_block() {
-        let restored =
-            crate::node::types::BlockAndReceipts::from_db(HlBlock::default(), vec![]).unwrap();
+        let restored = BlockAndReceipts::from_db(HlBlock::default(), vec![]).unwrap();
 
         assert!(restored.system_txs.is_empty());
         assert!(restored.receipts.is_empty());
@@ -417,7 +419,7 @@ mod tests {
         let (mut block, receipts) = database_round_trip_input(tx);
         block.header.extras.system_tx_count = 2;
 
-        assert!(crate::node::types::BlockAndReceipts::from_db(block, receipts).is_err());
+        assert!(BlockAndReceipts::from_db(block, receipts).is_err());
     }
 
     #[test]
@@ -425,7 +427,7 @@ mod tests {
         let tx = system_tx(HOLDER_A, TOKEN, 1);
         let (block, _) = database_round_trip_input(tx);
 
-        assert!(crate::node::types::BlockAndReceipts::from_db(block, vec![]).is_err());
+        assert!(BlockAndReceipts::from_db(block, vec![]).is_err());
     }
 
     #[test]
@@ -434,14 +436,37 @@ mod tests {
         let (block, mut receipts) = database_round_trip_input(tx);
         receipts.push(receipts[0].clone());
 
-        assert!(crate::node::types::BlockAndReceipts::from_db(block, receipts).is_err());
+        assert!(BlockAndReceipts::from_db(block, receipts).is_err());
+    }
+
+    #[test]
+    fn sync_round_trip_carries_system_tx_receipts_hash() {
+        let mut tx = system_tx(HOLDER_A, TOKEN, 1);
+        tx.receipt.as_mut().unwrap().cumulative_gas_used = 45_071;
+        let (block, mut receipts) = database_round_trip_input(tx);
+        let commitment = block.body.system_tx_receipts_hash;
+        assert!(commitment.is_some());
+
+        // The database keeps no gas for system txs, so the commitment travels alongside.
+        receipts[0].cumulative_gas_used = 0;
+        let served = BlockAndReceipts::from_db(block, receipts).unwrap();
+        let bytes = rmp_serde::to_vec_named(&served).unwrap();
+        let fetched: BlockAndReceipts = rmp_serde::from_slice(&bytes).unwrap();
+        assert_eq!(
+            fetched.clone().to_reth_block(TESTNET_CHAIN_ID).body.system_tx_receipts_hash,
+            commitment
+        );
+
+        // A server without the field serves blocks without a commitment, not a broken one.
+        let old = BlockAndReceipts { system_tx_receipts_hash: None, ..fetched };
+        assert_eq!(old.to_reth_block(TESTNET_CHAIN_ID).body.system_tx_receipts_hash, None);
     }
 
     /// Full sync round trip (to_reth_block -> from_db -> to_reth_block); returns the re-served
     /// system tx's recovered signer, which must equal the original's.
     fn round_trip_signer(tx: SystemTx) -> Address {
         let (block, receipts) = database_round_trip_input(tx);
-        let restored = crate::node::types::BlockAndReceipts::from_db(block, receipts).unwrap();
+        let restored = BlockAndReceipts::from_db(block, receipts).unwrap();
         assert_eq!(restored.system_txs.len(), 1);
         let reserved = restored.to_reth_block(TESTNET_CHAIN_ID);
         reserved.body.inner.transactions[0].recover_signer().unwrap()

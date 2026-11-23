@@ -93,7 +93,15 @@ where
                     sidecars: _,
                     read_precompile_calls,
                     highest_precompile_address,
-                }) => (Some(inner), HlExtras { read_precompile_calls, highest_precompile_address }),
+                    system_tx_receipts_hash,
+                }) => (
+                    Some(inner),
+                    HlExtras {
+                        read_precompile_calls,
+                        highest_precompile_address,
+                        system_tx_receipts_hash,
+                    },
+                ),
                 None => Default::default(),
             };
             eth_bodies.push((block_number, inner_opt));
@@ -144,6 +152,7 @@ where
                 sidecars: None,
                 read_precompile_calls: extra.read_precompile_calls,
                 highest_precompile_address: extra.highest_precompile_address,
+                system_tx_receipts_hash: extra.system_tx_receipts_hash,
             })
             .collect())
     }

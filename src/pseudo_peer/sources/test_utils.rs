@@ -42,6 +42,7 @@ pub fn block_with_parent(number: u64, marker: u8, parent_hash: B256) -> BlockAnd
         system_txs: vec![],
         read_precompile_calls: ReadPrecompileCalls(vec![]),
         highest_precompile_address: Some(Address::repeat_byte(marker)),
+        system_tx_receipts_hash: None,
     }
 }
 
