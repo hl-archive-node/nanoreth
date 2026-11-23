@@ -3,8 +3,8 @@
 //! Changes:
 //! - ReadPrecompileCalls supports RLP encoding / decoding
 use alloy_consensus::TxType;
-use alloy_primitives::{Address, B256, Bytes, Log};
-use alloy_rlp::{Decodable, Encodable, RlpDecodable, RlpEncodable};
+use alloy_primitives::{Address, B256, Bytes, Log, keccak256};
+use alloy_rlp::{Decodable, Encodable, RlpDecodable, RlpEncodable, encode};
 use bytes::BufMut;
 use reth_ethereum_primitives::EthereumReceipt;
 use reth_primitives_traits::{InMemorySize, SignerRecoverable};
@@ -27,12 +27,71 @@ pub use reth_compat::{initialize_spot_metadata_cache, set_spot_metadata_db};
 pub struct HlExtras {
     pub read_precompile_calls: Option<ReadPrecompileCalls>,
     pub highest_precompile_address: Option<Address>,
+    /// See [`HlBlockBody::system_tx_receipts_hash`](crate::HlBlockBody). Last, and skipped when
+    /// absent, so rows written without it (and the `eth_blockPrecompileData` output) are
+    /// unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_tx_receipts_hash: Option<B256>,
+}
+
+/// Commitment to a block's system tx receipts, in execution order, over every field of the
+/// receipts hl-node writes (the fields hyper-evm-sync compares):
+/// `keccak256(rlp([[tx_type, success, cumulative_gas_used, logs], ...]))`, where
+/// `cumulative_gas_used` counts the block's system txs only.
+pub fn system_tx_receipts_hash<'a>(
+    receipts: impl IntoIterator<Item = (u8, bool, u64, &'a [Log])>,
+) -> B256 {
+    #[derive(RlpEncodable)]
+    struct Receipt {
+        tx_type: u8,
+        success: bool,
+        cumulative_gas_used: u64,
+        logs: Vec<Log>,
+    }
+    let receipts: Vec<Receipt> = receipts
+        .into_iter()
+        .map(|(tx_type, success, cumulative_gas_used, logs)| Receipt {
+            tx_type,
+            success,
+            cumulative_gas_used,
+            logs: logs.to_vec(),
+        })
+        .collect();
+    keccak256(encode(&receipts))
+}
+
+impl LegacyReceipt {
+    /// [`system_tx_receipts_hash`] of a block source's system tx receipts.
+    ///
+    /// Source receipts carry the cumulative gas of the system txs, which strictly increases as no
+    /// system tx uses 0 gas. Receipts rebuilt from a nanoreth database carry 0 instead; then the
+    /// outcome is unknown and `None` is returned (as for a block without system txs).
+    pub(crate) fn system_tx_receipts_hash<'a>(
+        receipts: impl IntoIterator<Item = &'a LegacyReceipt>,
+    ) -> Option<B256> {
+        let mut prev = 0;
+        let mut fields = Vec::new();
+        for r in receipts {
+            if r.cumulative_gas_used <= prev {
+                return None;
+            }
+            prev = r.cumulative_gas_used;
+            fields.push((
+                r.tx_type.clone() as u8,
+                r.success,
+                r.cumulative_gas_used,
+                r.logs.as_slice(),
+            ));
+        }
+        (!fields.is_empty()).then(|| system_tx_receipts_hash(fields))
+    }
 }
 
 impl InMemorySize for HlExtras {
     fn size(&self) -> usize {
         self.read_precompile_calls.as_ref().map_or(0, |s| s.0.len()) +
-            self.highest_precompile_address.as_ref().map_or(0, |_| 20)
+            self.highest_precompile_address.as_ref().map_or(0, |_| 20) +
+            self.system_tx_receipts_hash.as_ref().map_or(0, |_| 32)
     }
 }
 
@@ -61,18 +120,27 @@ pub struct BlockAndReceipts {
     #[serde(default)]
     pub read_precompile_calls: ReadPrecompileCalls,
     pub highest_precompile_address: Option<Address>,
+    /// [`HlBlockBody::system_tx_receipts_hash`](crate::HlBlockBody) of a block served by a
+    /// nanoreth sync server (`rpc://`), whose stored system tx receipts no longer carry the gas
+    /// to compute it from. Absent in hl-node blocks, which carry it in their receipts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_tx_receipts_hash: Option<B256>,
 }
 
 impl BlockAndReceipts {
     pub fn to_reth_block(self, chain_id: u64) -> HlBlock {
         let EvmBlock::Reth115(block) = self.block;
-        block.to_reth_block(
-            self.read_precompile_calls.clone(),
+        let mut block = block.to_reth_block(
+            self.read_precompile_calls,
             self.highest_precompile_address,
-            self.system_txs.clone(),
-            self.receipts.clone(),
+            self.system_txs,
+            self.receipts,
             chain_id,
-        )
+        );
+        if block.body.system_tx_receipts_hash.is_none() {
+            block.body.system_tx_receipts_hash = self.system_tx_receipts_hash;
+        }
+        block
     }
 
     /// Construct a `BlockAndReceipts` from database types (reverse of `to_reth_block`).
@@ -137,6 +205,7 @@ impl BlockAndReceipts {
             system_txs,
             read_precompile_calls: block.body.read_precompile_calls.unwrap_or_default(),
             highest_precompile_address: block.body.highest_precompile_address,
+            system_tx_receipts_hash: block.body.system_tx_receipts_hash,
         })
     }
 
@@ -257,4 +326,40 @@ pub enum ReadPrecompileResult {
     OutOfGas,
     Error,
     UnexpectedError,
+}
+
+#[cfg(test)]
+mod system_tx_receipts_hash_tests {
+    use super::*;
+
+    fn receipt(success: bool, cumulative_gas_used: u64, logs: Vec<Log>) -> LegacyReceipt {
+        LegacyReceipt { tx_type: LegacyTxType::Legacy, success, cumulative_gas_used, logs }
+    }
+
+    #[test]
+    fn source_receipts_commit_to_every_field() {
+        let log =
+            Log::new_unchecked(Address::repeat_byte(1), vec![B256::repeat_byte(2)], Bytes::new());
+        let source = [receipt(true, 45_071, vec![log.clone()]), receipt(false, 90_142, vec![])];
+        let expected =
+            system_tx_receipts_hash([(0, true, 45_071, &[log][..]), (0, false, 90_142, &[][..])]);
+        assert_eq!(LegacyReceipt::system_tx_receipts_hash(&source), Some(expected));
+    }
+
+    #[test]
+    fn unknown_gas_or_no_system_txs_commit_to_nothing() {
+        // Receipts rebuilt from a nanoreth database carry no gas.
+        assert_eq!(LegacyReceipt::system_tx_receipts_hash(&[receipt(true, 0, vec![])]), None);
+        assert_eq!(LegacyReceipt::system_tx_receipts_hash(&[]), None);
+    }
+
+    #[test]
+    fn any_field_change_changes_the_hash() {
+        let base = system_tx_receipts_hash([(0, true, 21_000, &[][..])]);
+        assert_ne!(base, system_tx_receipts_hash([(2, true, 21_000, &[][..])]));
+        assert_ne!(base, system_tx_receipts_hash([(0, false, 21_000, &[][..])]));
+        assert_ne!(base, system_tx_receipts_hash([(0, true, 21_001, &[][..])]));
+        let log = Log::new_unchecked(Address::ZERO, vec![], Bytes::from_static(&[1]));
+        assert_ne!(base, system_tx_receipts_hash([(0, true, 21_000, &[log][..])]));
+    }
 }

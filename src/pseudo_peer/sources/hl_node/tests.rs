@@ -87,6 +87,7 @@ fn empty_block(number: u64, timestamp: u64, extra_data: &'static [u8]) -> LocalB
             system_txs: vec![],
             read_precompile_calls: ReadPrecompileCalls(vec![]),
             highest_precompile_address: None,
+            system_tx_receipts_hash: None,
         },
     )
 }
