@@ -20,8 +20,8 @@ use reth_network::{
 };
 use reth_network_api::PeerId;
 use reth_node_ethereum::EthEngineTypes;
-use reth_payload_primitives::{BuiltPayload, EngineApiMessageVersion, PayloadTypes};
-use reth_primitives::NodePrimitives;
+use reth_payload_primitives::{BuiltPayload, PayloadTypes};
+use reth_primitives_traits::NodePrimitives;
 use reth_primitives_traits::{AlloyBlockHeader, Block};
 use reth_provider::{BlockHashReader, BlockIdReader, BlockNumReader};
 use std::{
@@ -68,7 +68,7 @@ where
 
 impl<Provider> ImportService<Provider>
 where
-    Provider: BlockIdReader + BlockNumReader + Clone + 'static,
+    Provider: BlockIdReader + BlockNumReader + Clone + Sync + 'static,
 {
     /// Create a new block import service
     pub fn new(
@@ -91,7 +91,7 @@ where
         let engine = self.engine.clone();
         Box::pin(async move {
             let sealed_block = block.block.0.block.clone().seal();
-            let payload = HlPayloadTypes::block_to_payload(sealed_block);
+            let payload = HlPayloadTypes::block_to_payload(sealed_block, None);
 
             match engine.new_payload(payload).await {
                 Ok(payload_status) => match payload_status.status {
@@ -133,8 +133,7 @@ where
                 finalized_block_hash,
             };
 
-            match engine.fork_choice_updated(state, None, EngineApiMessageVersion::default()).await
-            {
+            match engine.fork_choice_updated(state, None).await {
                 Ok(response) => match response.payload_status.status {
                     PayloadStatusEnum::Valid => {
                         Outcome { peer: peer_id, result: Ok(BlockValidation::ValidBlock { block }) }
@@ -161,7 +160,7 @@ where
 
 impl<Provider> Future for ImportService<Provider>
 where
-    Provider: BlockIdReader + BlockNumReader + BlockHashReader + Clone + 'static + Unpin,
+    Provider: BlockIdReader + BlockNumReader + BlockHashReader + Clone + Sync + 'static + Unpin,
 {
     type Output = Result<(), Box<dyn std::error::Error>>;
 
@@ -196,7 +195,7 @@ mod tests {
     use reth_engine_primitives::{BeaconEngineMessage, OnForkChoiceUpdated};
     use reth_eth_wire::NewBlock;
     use reth_node_ethereum::EthEngineTypes;
-    use reth_primitives::Block;
+    use reth_primitives_traits::Block;
     use reth_provider::{BlockIdReader, ProviderError, ProviderResult};
     use std::{
         sync::Arc,
@@ -406,15 +405,15 @@ mod tests {
         tokio::spawn(Box::pin(async move {
             while let Some(message) = from_engine.recv().await {
                 match message {
-                    BeaconEngineMessage::NewPayload { payload: _, tx } => {
+                    BeaconEngineMessage::NewPayload { payload: _, tx, .. } => {
                         tx.send(Ok(PayloadStatus::new(responses.new_payload.clone(), None)))
                             .unwrap();
                     }
                     BeaconEngineMessage::ForkchoiceUpdated {
                         state: _,
                         payload_attrs: _,
-                        version: _,
                         tx,
+                        ..
                     } => {
                         tx.send(Ok(OnForkChoiceUpdated::valid(PayloadStatus::new(
                             responses.fcu.clone(),

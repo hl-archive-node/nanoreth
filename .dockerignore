@@ -1,0 +1,18 @@
+# Exclude everything by default, then allow back only what the image build needs.
+# Without this the build context includes `target/`, which is tens of gigabytes.
+*
+
+# Source and manifests
+!/src
+!/tests
+!build.rs
+!Cargo.toml
+!Cargo.lock
+!rustfmt.toml
+
+# Needed by build.rs: vergen derives the version string from git metadata
+!/.git
+
+# Copied into the runtime stage
+!LICENSE-*
+!README.md

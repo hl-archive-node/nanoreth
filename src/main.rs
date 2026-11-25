@@ -40,14 +40,26 @@ struct CapturedMethods {
     ipc: Option<jsonrpsee::Methods>,
 }
 
+/// Default size of each proof worker pool; see `main`.
+const DEFAULT_PROOF_WORKER_COUNT: usize = 8;
+
 fn main() -> eyre::Result<()> {
     reth_cli_util::sigsegv_handler::install();
 
     // Initialize custom version metadata before parsing CLI so --version uses reth-hl values
     reth_hl::version::init_reth_hl_version();
 
+    // reth sizes each proof worker pool at 4x the CPU pool (1024 threads on 128 cores) and wakes
+    // a quarter to all of them per block at the tip. HyperEVM blocks need a fraction of that,
+    // and the extra threads cost ~15 cores per node. `--engine.{storage,account}-worker-count`
+    // still override this; 0 restores reth's sizing.
+    let _ = reth::args::DefaultEngineValues::default()
+        .with_storage_worker_count(Some(DEFAULT_PROOF_WORKER_COUNT))
+        .with_account_worker_count(Some(DEFAULT_PROOF_WORKER_COUNT))
+        .try_init();
+
     Cli::<HlChainSpecParser, HlNodeArgs>::parse().run(
-        |builder: WithLaunchContext<NodeBuilder<Arc<DatabaseEnv>, HlChainSpec>>,
+        |builder: WithLaunchContext<NodeBuilder<DatabaseEnv, HlChainSpec>>,
          ext: HlNodeArgs| async move {
             // Apply spot-meta CLI overrides before anything fetches metadata.
             spot_meta::set_spot_meta_url(ext.spot_meta_url.clone());
@@ -157,7 +169,7 @@ fn main() -> eyre::Result<()> {
                         SubscribeFixup::new(
                             Arc::new(ctx.registry.eth_handlers().pubsub.clone()),
                             Arc::new(ctx.registry.eth_api().provider().clone()),
-                            Box::new(ctx.node().task_executor.clone()),
+                            ctx.node().task_executor.clone(),
                         )
                         .into_rpc(),
                     )?;
@@ -214,7 +226,7 @@ fn main() -> eyre::Result<()> {
                         return Ok(());
                     }
 
-                    ctx.node().task_executor.clone().spawn_critical(
+                    ctx.node().task_executor.clone().spawn_critical_task(
                         "hl-rpc-server-restart",
                         Box::pin(server_restart::restart_servers(
                             handles.rpc,
@@ -229,10 +241,10 @@ fn main() -> eyre::Result<()> {
                     Ok(())
                 })
                 .apply(|mut builder| {
-                    builder.db_mut().create_tables_for::<Tables>().expect("create tables");
+                    builder.db_mut().create_and_track_tables_for::<Tables>().expect("create tables");
 
                     let chain_id = builder.config().chain.inner.chain().id();
-                    let db = builder.db_mut().clone();
+                    let db = Arc::new(builder.db_mut().clone());
 
                     // Set database handle for on-demand persistence
                     set_spot_metadata_db(db.clone());

@@ -12,6 +12,8 @@ pub mod service;
 pub mod sources;
 pub mod utils;
 
+use reth::tasks::Runtime;
+use reth_metrics::common::mpsc::memory_bounded_channel;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{error, info};
@@ -35,7 +37,21 @@ pub mod prelude {
 
 use crate::{chainspec::HlChainSpec, node::network::HlNetworkPrimitives};
 use reth_network::{NetworkEvent, NetworkEventListenerProvider, NetworkHandle};
-use reth_network_api::{Peers, PeersInfo};
+use reth_network_api::{NetworkInfo, Peers};
+use std::net::{Ipv4Addr, SocketAddr};
+
+/// The address a network on this host can be dialled at.
+///
+/// `local_node_record` reports the externally advertised address, NAT-resolved even with NAT
+/// disabled, which is not what the listener is bound to. The pseudo peer runs in-process, so it
+/// dials the bound address, with an unspecified IP replaced by localhost.
+fn local_dial_addr(network: &NetworkHandle<HlNetworkPrimitives>) -> SocketAddr {
+    let mut addr = network.local_addr();
+    if addr.ip().is_unspecified() {
+        addr.set_ip(Ipv4Addr::LOCALHOST.into());
+    }
+    addr
+}
 
 fn configure_pseudo_peer_connection(
     pseudo_peer: &NetworkHandle<HlNetworkPrimitives>,
@@ -43,12 +59,12 @@ fn configure_pseudo_peer_connection(
 ) {
     // The destination sees this as an inbound connection. Register it up front so adaptive
     // request timeouts cannot lower the pseudo peer's reputation until it is banned.
-    let pseudo_peer_record = pseudo_peer.local_node_record();
-    destination.add_trusted_peer(pseudo_peer_record.id, pseudo_peer_record.tcp_addr());
-
-    let destination_record = destination.local_node_record();
-    pseudo_peer.add_trusted_peer(destination_record.id, destination_record.tcp_addr());
+    destination.add_trusted_peer(*pseudo_peer.peer_id(), local_dial_addr(pseudo_peer));
+    pseudo_peer.add_trusted_peer(*destination.peer_id(), local_dial_addr(destination));
 }
+
+/// Memory budget for the (drained-and-discarded) transaction event channel.
+const TX_EVENT_CHANNEL_MEMORY_LIMIT_BYTES: usize = 4 * 1024 * 1024;
 
 /// Main function that starts the network manager and processes eth requests
 pub async fn start_pseudo_peer(
@@ -56,15 +72,23 @@ pub async fn start_pseudo_peer(
     destination_network: NetworkHandle<HlNetworkPrimitives>,
     block_store: Arc<BlockStore>,
     debug_cutoff_height: Option<u64>,
+    runtime: Runtime,
 ) -> eyre::Result<()> {
     // Create network manager (no boot_nodes — we add the peer directly)
-    let (mut network, start_tx) =
-        create_network_manager((*chain_spec).clone(), block_store.clone(), debug_cutoff_height)
-            .await?;
+    let (mut network, start_tx) = create_network_manager(
+        (*chain_spec).clone(),
+        block_store.clone(),
+        debug_cutoff_height,
+        runtime,
+    )
+    .await?;
 
     // Create the channels for receiving eth messages
     let (eth_tx, mut eth_rx) = mpsc::channel(32);
-    let (transaction_tx, mut transaction_rx) = mpsc::unbounded_channel();
+    // The network manager now takes a memory-bounded sender for transaction events; the
+    // pseudo peer only drains it, so the exact budget is irrelevant.
+    let (transaction_tx, mut transaction_rx) =
+        memory_bounded_channel(TX_EVENT_CHANNEL_MEMORY_LIMIT_BYTES, "pseudo_peer.transactions");
 
     network.set_eth_request_handler(eth_tx);
     network.set_transactions(transaction_tx);
@@ -77,10 +101,9 @@ pub async fn start_pseudo_peer(
     tokio::spawn(network);
 
     // Directly add the main node as a peer (bypasses discovery)
-    let node_record = destination_network.local_node_record();
     info!(
-        peer_id = %node_record.id,
-        addr = %node_record.tcp_addr(),
+        peer_id = %destination_network.peer_id(),
+        addr = %local_dial_addr(&destination_network),
         "Adding main node as direct peer"
     );
     configure_pseudo_peer_connection(&network_handle, &destination_network);
@@ -144,14 +167,19 @@ mod tests {
     async fn pseudo_peer_is_trusted_by_main_node() {
         let pseudo_dir = TempDir::new().unwrap();
         let destination_dir = TempDir::new().unwrap();
-        let (pseudo_network, _) =
-            create_network_manager(HlChainSpec::default(), local_store(pseudo_dir.path()), None)
-                .await
-                .unwrap();
+        let (pseudo_network, _) = create_network_manager(
+            HlChainSpec::default(),
+            local_store(pseudo_dir.path()),
+            None,
+            Runtime::test(),
+        )
+        .await
+        .unwrap();
         let (destination_network, _) = create_network_manager(
             HlChainSpec::default(),
             local_store(destination_dir.path()),
             None,
+            Runtime::test(),
         )
         .await
         .unwrap();

@@ -19,7 +19,7 @@ use reth_chainspec::EthChainSpec;
 use reth_cli::chainspec::ChainSpecParser;
 use reth_cli_commands::{common::EnvironmentArgs, launcher::FnLauncher};
 use reth_db::{DatabaseEnv, init_db, mdbx::init_db_for};
-use reth_tracing::FileWorkerGuard;
+use reth_tracing::TracingGuards;
 use std::{
     fmt::{self},
     num::NonZeroU32,
@@ -156,6 +156,8 @@ pub struct HlNodeArgs {
 }
 
 /// reth_hl cli commands: the built-in reth subcommands plus reth_hl-specific extras.
+// Parsed once at startup, so the size gap between the variants does not matter.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Subcommand)]
 pub enum HlCommands<
     Spec: ChainSpecParser = HlChainSpecParser,
@@ -225,11 +227,33 @@ where
     pub fn run(
         self,
         launcher: impl AsyncFnOnce(
-            WithLaunchContext<NodeBuilder<Arc<DatabaseEnv>, C::ChainSpec>>,
+            WithLaunchContext<NodeBuilder<DatabaseEnv, C::ChainSpec>>,
             Ext,
         ) -> eyre::Result<()>,
     ) -> eyre::Result<()> {
-        self.with_runner(CliRunner::try_default_runtime()?, launcher)
+        let runner = CliRunner::try_with_runtime_config(self.runtime_config())?;
+        self.with_runner(runner, launcher)
+    }
+
+    /// The task runtime config for this command, built from the node's engine args the way reth's
+    /// own CLI does. The runtime sizes its worker pools when it is built, so without this the
+    /// `--engine.{storage,account}-worker-count`, `--engine.prewarming-threads`,
+    /// `--engine.reserved-cpu-cores` and `--engine.cpu-cores` flags are parsed but never applied.
+    fn runtime_config(&self) -> reth::tasks::RuntimeConfig {
+        let HlCommands::Reth(Commands::Node(command)) = &self.command else {
+            return reth::tasks::RuntimeConfig::default();
+        };
+        let config = reth::tasks::RuntimeConfig::default().with_rayon(reth::tasks::RayonConfig {
+            reserved_cpu_cores: command.engine.reserved_cpu_cores,
+            proof_storage_worker_threads: command.engine.storage_worker_count,
+            proof_account_worker_threads: command.engine.account_worker_count,
+            prewarming_threads: command.engine.prewarming_threads,
+            ..Default::default()
+        });
+        match command.engine.cpu_cores {
+            Some(cpu_cores) => config.with_cpu_cores(cpu_cores),
+            None => config,
+        }
     }
 
     /// Execute the configured cli command with the provided [`CliRunner`].
@@ -237,7 +261,7 @@ where
         mut self,
         runner: CliRunner,
         launcher: impl AsyncFnOnce(
-            WithLaunchContext<NodeBuilder<Arc<DatabaseEnv>, C::ChainSpec>>,
+            WithLaunchContext<NodeBuilder<DatabaseEnv, C::ChainSpec>>,
             Ext,
         ) -> eyre::Result<()>,
     ) -> eyre::Result<()> {
@@ -257,6 +281,8 @@ where
             (HlEvmConfig::new(spec.clone()), Arc::new(HlConsensus::new(spec)))
         };
 
+        let rt = runner.runtime();
+
         // Handle reth_hl-specific commands; otherwise fall through to the built-in
         // reth subcommands below.
         let command = match self.command {
@@ -269,13 +295,13 @@ where
                 // NOTE: This is for one time migration around Oct 10 upgrade:
                 // It's not necessary anymore, an environment variable gate is added here.
                 if std::env::var("CHECK_DB_MIGRATION").is_ok() {
-                    Self::migrate_db(&command.chain, &command.datadir, &command.db)
+                    Self::migrate_db(&command.chain, &command.datadir, &command.db, rt.clone())
                         .expect("Failed to migrate database");
                 }
                 command.execute(ctx, FnLauncher::new::<C, Ext>(launcher))
             }),
             Commands::Init(command) => {
-                runner.run_blocking_until_ctrl_c(command.execute::<HlNode>())
+                runner.run_blocking_until_ctrl_c(command.execute::<HlNode>(rt))
             }
             Commands::InitState(command) => {
                 // Validate file paths early with clear error messages.
@@ -317,23 +343,28 @@ where
                 }
                 // Need to invoke `init_db_for` to create `BlockReadPrecompileCalls` table
                 Self::init_db(&command.env)?;
-                runner.run_blocking_until_ctrl_c(command.execute::<HlNode>())
+                runner.run_blocking_until_ctrl_c(command.execute::<HlNode>(rt))
             }
             Commands::DumpGenesis(command) => runner.run_blocking_until_ctrl_c(command.execute()),
-            Commands::Db(command) => runner.run_blocking_until_ctrl_c(command.execute::<HlNode>()),
+            Commands::Db(command) => {
+                runner.run_blocking_command_until_exit(|ctx| command.execute::<HlNode>(ctx))
+            }
             Commands::Stage(command) => {
                 runner.run_command_until_exit(|ctx| command.execute::<HlNode, _>(ctx, components))
             }
             Commands::Config(command) => runner.run_until_ctrl_c(command.execute()),
-            Commands::Prune(command) => runner.run_until_ctrl_c(command.execute::<HlNode>()),
+            Commands::Prune(command) => {
+                runner.run_command_until_exit(|ctx| command.execute::<HlNode>(ctx))
+            }
             Commands::Import(command) => {
-                runner.run_blocking_until_ctrl_c(command.execute::<HlNode, _>(components))
+                runner.run_blocking_until_ctrl_c(command.execute::<HlNode, _>(components, rt))
             }
             Commands::P2P(_command) => not_applicable!(P2P),
             Commands::ImportEra(_command) => not_applicable!(ImportEra),
             Commands::Download(_command) => not_applicable!(Download),
             Commands::ExportEra(_) => not_applicable!(ExportEra),
             Commands::ReExecute(_) => not_applicable!(ReExecute),
+            Commands::SnapshotManifest(_) => not_applicable!(SnapshotManifest),
             #[cfg(feature = "dev")]
             Commands::TestVectors(_command) => not_applicable!(TestVectors),
         }
@@ -343,7 +374,7 @@ where
     ///
     /// If file logging is enabled, this function returns a guard that must be kept alive to ensure
     /// that all logs are flushed to disk.
-    pub fn init_tracing(&self) -> eyre::Result<Option<FileWorkerGuard>> {
+    pub fn init_tracing(&self) -> eyre::Result<TracingGuards> {
         let guard = self.logs.init_tracing()?;
         Ok(guard)
     }
@@ -365,8 +396,9 @@ where
         chain: &HlChainSpec,
         datadir: &DatadirArgs,
         db: &DatabaseArgs,
+        runtime: reth::tasks::Runtime,
     ) -> eyre::Result<()> {
-        Migrator::<HlNode>::new(chain.clone(), datadir.clone(), *db)?.migrate_db()?;
+        Migrator::<HlNode>::new(chain.clone(), datadir.clone(), *db, runtime)?.migrate_db()?;
         Ok(())
     }
 }

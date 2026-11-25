@@ -4,18 +4,16 @@ use crate::{
     evm::transaction::HlTxEnvExt,
     node::{
         evm::{
-            ScopedReadPrecompileForwarder, apply_precompiles, apply_precompiles_with_forwarder,
-            read_precompile_forwarder::read_precompile_forwarder,
+            ScopedReadPrecompileForwarder, apply_precompiles_with_forwarder, config::HlEvmConfig,
+            factory::RpcPrecompileSource, read_precompile_forwarder::read_precompile_forwarder,
         },
         types::HlExtras,
     },
 };
-use alloy_consensus::{BlockHeader, transaction::TxHashRef};
 use alloy_eips::BlockId;
-use alloy_evm::{Evm, EvmFactory, block::BlockExecutorFactory};
+use alloy_evm::Evm;
 use alloy_network::Ethereum;
 use alloy_primitives::U256;
-use alloy_rpc_types_eth::TransactionInfo;
 use reth::{
     api::{FullNodeTypes, HeaderTy, NodeTypes, PrimitivesTy},
     builder::{
@@ -23,40 +21,34 @@ use reth::{
         rpc::{EthApiBuilder, EthApiCtx},
     },
     rpc::{
-        eth::{DevSigner, FullEthApiServer, core::EthApiInner},
+        eth::{FullEthApiServer, core::EthApiInner},
         server_types::eth::{
             EthApiError, EthStateCache, FeeHistoryCache, GasPriceOracle,
             receipt::EthReceiptConverter,
         },
     },
     tasks::{
-        TaskSpawner,
+        Runtime,
         pool::{BlockingTaskGuard, BlockingTaskPool},
     },
 };
-use reth_evm::{
-    ConfigureEvm, Database, EvmEnvFor, EvmFor, HaltReasonFor, InspectorFor, TxEnvFor,
-    tracing::{TracingCtx, TxTracer},
-};
-use reth_primitives::NodePrimitives;
-use reth_primitives_traits::{BlockBody, Recovered, RecoveredBlock};
-use reth_provider::{
-    BlockReaderIdExt, ChainSpecProvider, ProviderError, ProviderHeader, ProviderTx,
-};
-use reth_revm::{database::StateProviderDatabase, db::CacheDB};
+use reth_evm::{ConfigureEvm, EvmEnvFor, HaltReasonFor, InspectorFor, IntoTxEnv, TxEnvFor};
+use reth_primitives_traits::NodePrimitives;
+use reth_primitives_traits::RecoveredBlock;
+use reth_provider::{BlockReaderIdExt, ChainSpecProvider, ProviderError, ProviderHeader};
 use reth_rpc::RpcTypes;
 use reth_rpc_eth_api::{
     EthApiTypes, FromEvmError, RpcConvert, RpcConverter, RpcNodeCore, RpcNodeCoreExt,
-    SignableTxRequest,
     helpers::{
-        AddDevSigners, EthApiSpec, EthFees, EthState, LoadBlock, LoadFee, LoadPendingBlock,
-        LoadState, SpawnBlocking, Trace, pending_block::BuildPendingEnv, spec::SignersForApi,
+        EthApiSpec, EthFees, EthState, EthSubscriptions, GetBlockAccessList, LoadFee,
+        LoadPendingBlock, LoadState, SpawnBlocking, Trace, pending_block::BuildPendingEnv,
     },
 };
-use reth_rpc_eth_types::cache::db::{StateCacheDbRefMutWrapper, StateProviderTraitObjWrapper};
+use reth_rpc_eth_types::{EthApiSettings, cache::db::StateCacheDb};
 use reth_storage_api::{BlockNumReader, ProviderBlock};
-use revm::{DatabaseCommit, context::result::ResultAndState};
+use revm::context::result::ResultAndState;
 use std::{cmp::Ordering, fmt, marker::PhantomData, sync::Arc};
+use tokio::sync::Semaphore;
 
 mod block;
 mod call;
@@ -66,12 +58,18 @@ pub mod precompile;
 mod simulate;
 mod transaction;
 
-pub trait HlRpcNodeCore: RpcNodeCore<Primitives: NodePrimitives<Block = HlBlock>> {}
+pub trait HlRpcNodeCore:
+    RpcNodeCore<Primitives: NodePrimitives<Block = HlBlock>, Provider: HlExtrasProvider>
+{
+}
 
 /// Container type `HlEthApi`
 pub(crate) struct HlEthApiInner<N: HlRpcNodeCore, Rpc: RpcConvert> {
     /// Gateway to node's core components.
     pub(crate) eth_api: EthApiInner<N, Rpc>,
+    /// The node's EVM config with read precompile installation turned on; see
+    /// [`RpcPrecompileSource`]. Every RPC helper reaches the EVM through this one.
+    pub(crate) evm_config: N::Evm,
 }
 
 type HlRpcConvert<N, NetworkT> =
@@ -101,21 +99,25 @@ where
 impl<N, Rpc> EthApiTypes for HlEthApi<N, Rpc>
 where
     N: HlRpcNodeCore,
-    Rpc: RpcConvert<Primitives = N::Primitives>,
+    Rpc: RpcConvert<Primitives = N::Primitives, Error = EthApiError>,
 {
     type Error = EthApiError;
     type NetworkTypes = Rpc::Network;
     type RpcConvert = Rpc;
 
-    fn tx_resp_builder(&self) -> &Self::RpcConvert {
-        self.inner.eth_api.tx_resp_builder()
+    fn eth_api_settings(&self) -> &EthApiSettings {
+        self.inner.eth_api.eth_api_settings()
+    }
+
+    fn converter(&self) -> &Self::RpcConvert {
+        self.inner.eth_api.converter()
     }
 }
 
 impl<N, Rpc> RpcNodeCore for HlEthApi<N, Rpc>
 where
     N: HlRpcNodeCore,
-    Rpc: RpcConvert<Primitives = N::Primitives>,
+    Rpc: RpcConvert<Primitives = N::Primitives, Error = EthApiError>,
 {
     type Primitives = N::Primitives;
     type Provider = N::Provider;
@@ -130,7 +132,7 @@ where
 
     #[inline]
     fn evm_config(&self) -> &Self::Evm {
-        self.inner.eth_api.evm_config()
+        &self.inner.evm_config
     }
 
     #[inline]
@@ -160,27 +162,19 @@ where
     N: HlRpcNodeCore,
     Rpc: RpcConvert<Primitives = N::Primitives, Error = EthApiError>,
 {
-    type Transaction = ProviderTx<Self::Provider>;
-    type Rpc = Rpc::Network;
-
     #[inline]
     fn starting_block(&self) -> U256 {
         self.inner.eth_api.starting_block()
-    }
-
-    #[inline]
-    fn signers(&self) -> &SignersForApi<Self> {
-        self.inner.eth_api.signers()
     }
 }
 
 impl<N, Rpc> SpawnBlocking for HlEthApi<N, Rpc>
 where
     N: HlRpcNodeCore,
-    Rpc: RpcConvert<Primitives = N::Primitives>,
+    Rpc: RpcConvert<Primitives = N::Primitives, Error = EthApiError>,
 {
     #[inline]
-    fn io_task_spawner(&self) -> impl TaskSpawner {
+    fn io_task_spawner(&self) -> &Runtime {
         self.inner.eth_api.task_spawner()
     }
 
@@ -192,6 +186,11 @@ where
     #[inline]
     fn tracing_task_guard(&self) -> &BlockingTaskGuard {
         self.inner.eth_api.blocking_task_guard()
+    }
+
+    #[inline]
+    fn blocking_io_task_guard(&self) -> &Arc<Semaphore> {
+        self.inner.eth_api.blocking_io_request_semaphore()
     }
 }
 
@@ -240,134 +239,182 @@ where
 {
 }
 
-impl<N, Rpc> Trace for HlEthApi<N, Rpc>
+impl<N, Rpc> EthSubscriptions for HlEthApi<N, Rpc>
 where
-    N: HlRpcNodeCore<
-        Evm: ConfigureEvm<
-            BlockExecutorFactory: BlockExecutorFactory<EvmFactory: EvmFactory<Tx: HlTxEnvExt>>,
-        >,
-    >,
-    EthApiError: FromEvmError<N::Evm>,
+    N: HlRpcNodeCore,
     Rpc: RpcConvert<Primitives = N::Primitives, Error = EthApiError>,
 {
-    fn inspect<DB, I>(
-        &self,
-        db: DB,
-        evm_env: EvmEnvFor<Self::Evm>,
-        tx_env: TxEnvFor<Self::Evm>,
-        inspector: I,
-    ) -> Result<ResultAndState<HaltReasonFor<Self::Evm>>, Self::Error>
-    where
-        DB: Database<Error = ProviderError>,
-        I: InspectorFor<Self::Evm, DB>,
-    {
-        let block_number =
-            tx_env.rpc_state_block_number().unwrap_or(evm_env.block_env().number.to());
-        let (hl_extras, forwarder) = self.hl_call_precompiles(block_number)?;
+}
 
+impl<N, Rpc> GetBlockAccessList for HlEthApi<N, Rpc>
+where
+    N: HlRpcNodeCore<Primitives = HlPrimitives, Evm = HlEvmConfig>,
+    Rpc: RpcConvert<Primitives = HlPrimitives, Error = EthApiError, Evm = HlEvmConfig>,
+{
+}
+
+impl<N, Rpc> Trace for HlEthApi<N, Rpc>
+where
+    N: HlRpcNodeCore<Primitives = HlPrimitives, Evm = HlEvmConfig>,
+    Rpc: RpcConvert<Primitives = HlPrimitives, Error = EthApiError, Evm = HlEvmConfig>,
+{
+    fn inspect<'a>(
+        &self,
+        db: &'a mut StateCacheDb,
+        evm_env: EvmEnvFor<Self::Evm>,
+        tx_env: impl IntoTxEnv<TxEnvFor<Self::Evm>>,
+        inspector: impl InspectorFor<Self::Evm, &'a mut StateCacheDb>,
+    ) -> Result<ResultAndState<HaltReasonFor<Self::Evm>>, Self::Error> {
+        let tx_env: TxEnvFor<Self::Evm> = tx_env.into_tx_env();
+        let pinned = pinned_state_block(tx_env.rpc_state_block_number(), &evm_env);
+
+        // The factory installs read precompiles for the EVM's block; a call whose block number
+        // was overridden reads them as of the state block instead.
         let mut evm = self.evm_config().evm_with_env_and_inspector(db, evm_env, inspector);
-        apply_precompiles_with_forwarder(&mut evm, &hl_extras, forwarder);
-        evm.transact(tx_env).map_err(Self::Error::from_evm_err)
+        if let Some(block_number) = pinned {
+            let (hl_extras, forwarder) = self.hl_call_precompiles(block_number)?;
+            apply_precompiles_with_forwarder(&mut evm, &hl_extras, forwarder);
+        }
+        evm.transact(tx_env).map_err(<EthApiError as FromEvmError<HlEvmConfig>>::from_evm_err)
     }
 
-    fn apply_pre_execution_changes<DB: Send + Database + DatabaseCommit>(
+    fn apply_pre_execution_changes(
         &self,
-        _block: &reth_primitives_traits::RecoveredBlock<
-            reth_storage_api::ProviderBlock<Self::Provider>,
-        >,
-        _db: &mut DB,
-        _evm_env: &EvmEnvFor<Self::Evm>,
+        _block: &RecoveredBlock<ProviderBlock<Self::Provider>>,
+        _db: &mut StateCacheDb,
     ) -> Result<(), Self::Error> {
         // HL dynamic precompiles are EVM-local, so they must be installed on the actual
         // execution EVM rather than through this DB/env-only hook.
         Ok(())
     }
+}
 
-    async fn trace_block_until_with_inspector<Setup, Insp, F, R>(
-        &self,
-        block_id: BlockId,
-        block: Option<Arc<RecoveredBlock<ProviderBlock<Self::Provider>>>>,
-        highest_index: Option<u64>,
-        mut inspector_setup: Setup,
-        f: F,
-    ) -> Result<Option<Vec<R>>, Self::Error>
-    where
-        Self: LoadBlock,
-        F: Fn(
-                TransactionInfo,
-                TracingCtx<
-                    '_,
-                    Recovered<&ProviderTx<Self::Provider>>,
-                    EvmFor<Self::Evm, StateCacheDbRefMutWrapper<'_, '_>, Insp>,
-                >,
-            ) -> Result<R, Self::Error>
-            + Send
-            + 'static,
-        Setup: FnMut() -> Insp + Send + 'static,
-        Insp: Clone + for<'a, 'b> InspectorFor<Self::Evm, StateCacheDbRefMutWrapper<'a, 'b>>,
-        R: Send + 'static,
-    {
-        let block = async {
-            if block.is_some() {
-                return Ok(block);
-            }
-            self.recovered_block(block_id).await
-        };
+/// The state block a call's read precompiles must come from, when it is not the EVM's own block.
+///
+/// `prepare_call_env` records the state block before applying block overrides, while the RPC EVM
+/// factory has already installed precompiles for the (possibly overridden) EVM block.
+pub(crate) fn pinned_state_block<B: revm::context::Block, S>(
+    rpc_state_block_number: Option<u64>,
+    evm_env: &reth_evm::EvmEnv<S, B>,
+) -> Option<u64> {
+    let evm_block: u64 = evm_env.block_env.number().saturating_to();
+    rpc_state_block_number.filter(|block| *block != evm_block)
+}
 
-        let ((evm_env, _), block) = futures::try_join!(self.evm_env_at(block_id), block)?;
+/// Provider capabilities the read precompile lookups need.
+pub trait HlExtrasProvider: BlockReaderIdExt<Block = HlBlock> + BlockNumReader {}
+impl<P> HlExtrasProvider for P where P: BlockReaderIdExt<Block = HlBlock> + BlockNumReader {}
 
-        let Some(block) = block else { return Ok(None) };
-
-        if block.body().transactions().is_empty() {
-            return Ok(Some(Vec::new()));
-        }
-
-        self.spawn_blocking_io_fut(move |this| async move {
-            let state_at = block.parent_hash();
-            let block_hash = block.hash();
-            let block_number = evm_env.block_env.number.saturating_to();
-            let base_fee = evm_env.block_env.basefee;
-            let hl_extras =
-                this.get_hl_extras(evm_env.block_env.number.to::<u64>().into()).map_err(
-                    |err: ProviderError| <EthApiError as From<ProviderError>>::from(err),
-                )?;
-
-            let state = this.state_at_block_id(state_at.into()).await?;
-            let mut db =
-                CacheDB::new(StateProviderDatabase::new(StateProviderTraitObjWrapper(&state)));
-
-            let max_transactions = highest_index.map_or_else(
-                || block.body().transaction_count(),
-                |highest| highest as usize + 1,
-            );
-
-            let mut idx = 0;
-            let mut evm = this.evm_config().evm_factory().create_evm_with_inspector(
-                StateCacheDbRefMutWrapper(&mut db),
-                evm_env,
-                inspector_setup(),
-            );
-            apply_precompiles(&mut evm, &hl_extras);
-            let mut tracer = TxTracer::new(evm);
-
-            let results = tracer
-                .try_trace_many(block.transactions_recovered().take(max_transactions), |ctx| {
-                    let tx_info = TransactionInfo {
-                        hash: Some(*ctx.tx.tx_hash()),
-                        index: Some(idx),
-                        block_hash: Some(block_hash),
-                        block_number: Some(block_number),
-                        base_fee: Some(base_fee),
-                    };
-                    idx += 1;
-
-                    f(tx_info, ctx)
-                })
-                .collect::<Result<_, _>>()?;
-
-            Ok(Some(results))
+pub(crate) fn hl_extras_at<P: HlExtrasProvider>(
+    provider: &P,
+    block: BlockId,
+) -> Result<HlExtras, ProviderError> {
+    Ok(provider
+        .block_by_id(block)?
+        .map(|block| HlExtras {
+            read_precompile_calls: block.body.read_precompile_calls.clone(),
+            highest_precompile_address: block.body.highest_precompile_address,
+            system_tx_receipts_hash: None,
         })
-        .await
+        .unwrap_or_default())
+}
+
+/// Read precompile data to run a call at `block_number` with.
+///
+/// Alongside the block's recorded calls this returns the forwarder to resolve unrecorded
+/// inputs with, but only from the chain head onwards: HyperCore state is not archived, so
+/// forwarding a historical call would answer it with today's values.
+pub(crate) fn hl_call_precompiles_at<P: HlExtrasProvider>(
+    provider: &P,
+    block_number: u64,
+) -> Result<(HlExtras, Option<ScopedReadPrecompileForwarder>), ProviderError> {
+    let Some(forwarder) = read_precompile_forwarder() else {
+        return Ok((hl_extras_at(provider, block_number.into())?, None));
+    };
+
+    let chain_info = provider.chain_info()?;
+    let best_block_number = chain_info.best_number;
+    let forwarder = Some((forwarder, chain_info.best_hash));
+
+    match block_number.cmp(&best_block_number) {
+        Ordering::Less => Ok((hl_extras_at(provider, block_number.into())?, None)),
+        Ordering::Equal => Ok((hl_extras_at(provider, block_number.into())?, forwarder)),
+        // A block that has not been mined has no body to take the precompile address range
+        // from, so borrow the head's. Without this the range falls back to `0x800..=0x80d`
+        // and everything above it — `bbo` and up — is left uninstalled, so reading one looks
+        // like a call to a plain account rather than a precompile.
+        //
+        // Its recorded calls are left out: those belong to the head block's own transactions,
+        // and the forwarder answers the same inputs anyway.
+        Ordering::Greater => {
+            let head = hl_extras_at(provider, best_block_number.into())?;
+            Ok((
+                HlExtras {
+                    read_precompile_calls: None,
+                    highest_precompile_address: head.highest_precompile_address,
+                    system_tx_receipts_hash: None,
+                },
+                forwarder,
+            ))
+        }
+    }
+}
+
+/// Read precompile data for blocks simulated on top of `parent_block_number`.
+///
+/// A simulated block has no canonical body, so it must never borrow recorded calls from the
+/// canonical block at the same height. It only inherits the parent's precompile address range.
+/// Forwarding is available when the simulation starts at the head, where the upstream's
+/// `latest` HyperCore state matches the local state being simulated.
+pub(crate) fn hl_simulation_precompiles_at<P: HlExtrasProvider>(
+    provider: &P,
+    parent_block_number: u64,
+) -> Result<(HlExtras, Option<ScopedReadPrecompileForwarder>), ProviderError> {
+    let Some(forwarder) = read_precompile_forwarder() else {
+        return Ok((HlExtras::default(), None));
+    };
+
+    let chain_info = provider.chain_info()?;
+    let best_block_number = chain_info.best_number;
+    let extras_block_number = parent_block_number.min(best_block_number);
+    let parent = hl_extras_at(provider, extras_block_number.into())?;
+    let forwarder =
+        (parent_block_number >= best_block_number).then_some((forwarder, chain_info.best_hash));
+
+    Ok((
+        HlExtras {
+            read_precompile_calls: None,
+            highest_precompile_address: parent.highest_precompile_address,
+            system_tx_receipts_hash: None,
+        },
+        forwarder,
+    ))
+}
+
+/// Looks up read precompile data from the node's provider, for the RPC EVM factory.
+#[derive(Debug)]
+struct ProviderPrecompileSource<P> {
+    provider: P,
+}
+
+impl<P> RpcPrecompileSource for ProviderPrecompileSource<P>
+where
+    P: HlExtrasProvider + Send + Sync + fmt::Debug,
+{
+    fn precompiles_at(
+        &self,
+        block_number: u64,
+    ) -> Option<(HlExtras, Option<ScopedReadPrecompileForwarder>)> {
+        hl_call_precompiles_at(&self.provider, block_number)
+            .inspect_err(|err| {
+                tracing::warn!(
+                    target: "rpc::eth",
+                    block_number,
+                    %err,
+                    "Failed to load read precompile data; running without it"
+                )
+            })
+            .ok()
     }
 }
 
@@ -377,99 +424,21 @@ where
     Rpc: RpcConvert<Primitives = N::Primitives, Error = EthApiError>,
 {
     fn get_hl_extras(&self, block: BlockId) -> Result<HlExtras, ProviderError> {
-        Ok(self
-            .provider()
-            .block_by_id(block)?
-            .map(|block| HlExtras {
-                read_precompile_calls: block.body.read_precompile_calls.clone(),
-                highest_precompile_address: block.body.highest_precompile_address,
-                system_tx_receipts_hash: None,
-            })
-            .unwrap_or_default())
+        hl_extras_at(self.provider(), block)
     }
 
-    /// Read precompile data to run a call at `block_number` with.
-    ///
-    /// Alongside the block's recorded calls this returns the forwarder to resolve unrecorded
-    /// inputs with, but only from the chain head onwards: HyperCore state is not archived, so
-    /// forwarding a historical call would answer it with today's values.
     fn hl_call_precompiles(
         &self,
         block_number: u64,
     ) -> Result<(HlExtras, Option<ScopedReadPrecompileForwarder>), ProviderError> {
-        let Some(forwarder) = read_precompile_forwarder() else {
-            return Ok((self.get_hl_extras(block_number.into())?, None));
-        };
-
-        let chain_info = self.provider().chain_info()?;
-        let best_block_number = chain_info.best_number;
-        let forwarder = Some((forwarder, chain_info.best_hash));
-
-        match block_number.cmp(&best_block_number) {
-            Ordering::Less => Ok((self.get_hl_extras(block_number.into())?, None)),
-            Ordering::Equal => Ok((self.get_hl_extras(block_number.into())?, forwarder)),
-            // A block that has not been mined has no body to take the precompile address range
-            // from, so borrow the head's. Without this the range falls back to `0x800..=0x80d`
-            // and everything above it — `bbo` and up — is left uninstalled, so reading one looks
-            // like a call to a plain account rather than a precompile.
-            //
-            // Its recorded calls are left out: those belong to the head block's own transactions,
-            // and the forwarder answers the same inputs anyway.
-            Ordering::Greater => {
-                let head = self.get_hl_extras(best_block_number.into())?;
-                Ok((
-                    HlExtras {
-                        read_precompile_calls: None,
-                        highest_precompile_address: head.highest_precompile_address,
-                        system_tx_receipts_hash: None,
-                    },
-                    forwarder,
-                ))
-            }
-        }
+        hl_call_precompiles_at(self.provider(), block_number)
     }
 
-    /// Read precompile data for blocks simulated on top of `parent_block_number`.
-    ///
-    /// A simulated block has no canonical body, so it must never borrow recorded calls from the
-    /// canonical block at the same height. It only inherits the parent's precompile address range.
-    /// Forwarding is available when the simulation starts at the head, where the upstream's
-    /// `latest` HyperCore state matches the local state being simulated.
     fn hl_simulation_precompiles(
         &self,
         parent_block_number: u64,
     ) -> Result<(HlExtras, Option<ScopedReadPrecompileForwarder>), ProviderError> {
-        let Some(forwarder) = read_precompile_forwarder() else {
-            return Ok((HlExtras::default(), None));
-        };
-
-        let chain_info = self.provider().chain_info()?;
-        let best_block_number = chain_info.best_number;
-        let extras_block_number = parent_block_number.min(best_block_number);
-        let parent = self.get_hl_extras(extras_block_number.into())?;
-        let forwarder =
-            (parent_block_number >= best_block_number).then_some((forwarder, chain_info.best_hash));
-
-        Ok((
-            HlExtras {
-                read_precompile_calls: None,
-                highest_precompile_address: parent.highest_precompile_address,
-                system_tx_receipts_hash: None,
-            },
-            forwarder,
-        ))
-    }
-}
-
-impl<N, Rpc> AddDevSigners for HlEthApi<N, Rpc>
-where
-    N: HlRpcNodeCore,
-    Rpc: RpcConvert<
-        Network: RpcTypes<TransactionRequest: SignableTxRequest<ProviderTx<N::Provider>>>,
-    >,
-{
-    fn with_dev_accounts(&self) {
-        *self.inner.eth_api.signers().write() = DevSigner::random_signers(20)
+        hl_simulation_precompiles_at(self.provider(), parent_block_number)
     }
 }
 
@@ -490,16 +459,14 @@ impl<NetworkT> Default for HlEthApiBuilder<NetworkT> {
 impl<N, NetworkT> EthApiBuilder<N> for HlEthApiBuilder<NetworkT>
 where
     N: FullNodeComponents<Types: NodeTypes<ChainSpec = HlChainSpec, Primitives = HlPrimitives>>
-        + RpcNodeCore<
-            Primitives = PrimitivesTy<N::Types>,
-            Evm: ConfigureEvm<NextBlockEnvCtx: BuildPendingEnv<HeaderTy<N::Types>>>,
-        >,
+        + RpcNodeCore<Primitives = PrimitivesTy<N::Types>, Evm = HlEvmConfig>,
+    HlEvmConfig: ConfigureEvm<NextBlockEnvCtx: BuildPendingEnv<HeaderTy<N::Types>>>,
     NetworkT: RpcTypes,
     HlRpcConvert<N, NetworkT>: RpcConvert<Network = NetworkT, Primitives = PrimitivesTy<N::Types>>,
     HlEthApi<N, HlRpcConvert<N, NetworkT>>: FullEthApiServer<
             Provider = <N as FullNodeTypes>::Provider,
             Pool = <N as FullNodeComponents>::Pool,
-        > + AddDevSigners,
+        >,
 {
     type EthApi = HlEthApi<N, HlRpcConvert<N, NetworkT>>;
 
@@ -507,8 +474,11 @@ where
         let provider = FullNodeComponents::provider(ctx.components);
         let rpc_converter =
             RpcConverter::new(EthReceiptConverter::<HlChainSpec>::new(provider.chain_spec()));
+        let evm_config = RpcNodeCore::evm_config(ctx.components).with_rpc_precompiles(Arc::new(
+            ProviderPrecompileSource { provider: provider.clone() },
+        ));
         let eth_api = ctx.eth_api_builder().with_rpc_converter(rpc_converter).build_inner();
 
-        Ok(HlEthApi { inner: Arc::new(HlEthApiInner { eth_api }) })
+        Ok(HlEthApi { inner: Arc::new(HlEthApiInner { eth_api, evm_config }) })
     }
 }

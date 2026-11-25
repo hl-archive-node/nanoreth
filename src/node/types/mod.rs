@@ -89,9 +89,9 @@ impl LegacyReceipt {
 
 impl InMemorySize for HlExtras {
     fn size(&self) -> usize {
-        self.read_precompile_calls.as_ref().map_or(0, |s| s.0.len()) +
-            self.highest_precompile_address.as_ref().map_or(0, |_| 20) +
-            self.system_tx_receipts_hash.as_ref().map_or(0, |_| 32)
+        self.read_precompile_calls.as_ref().map_or(0, |s| s.0.len())
+            + self.highest_precompile_address.as_ref().map_or(0, |_| 20)
+            + self.system_tx_receipts_hash.as_ref().map_or(0, |_| 32)
     }
 }
 

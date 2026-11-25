@@ -41,9 +41,7 @@ pub(super) fn recover_testnet_system_tx_sender(
     }
     let sender = receipt?.logs.iter().find_map(|log| {
         let topics = log.data.topics();
-        (log.address == token
-            && topics.first() == Some(&ERC20_TRANSFER_TOPIC)
-            && topics.len() >= 2)
+        (log.address == token && topics.first() == Some(&ERC20_TRANSFER_TOPIC) && topics.len() >= 2)
             .then(|| Address::from_word(topics[1]))
     })?;
     // `s_to_address` treats `s == 1` as a sentinel (mapping it to 0x2222…2222), so a
@@ -100,7 +98,12 @@ mod tests {
         assert_eq!(recover(999, SENDER_RECOVERY_BLOCKS.start, SENDER_RECOVERY_TOKEN, log()), None);
         // before the first affected block
         assert_eq!(
-            recover(TESTNET_CHAIN_ID, SENDER_RECOVERY_BLOCKS.start - 1, SENDER_RECOVERY_TOKEN, log()),
+            recover(
+                TESTNET_CHAIN_ID,
+                SENDER_RECOVERY_BLOCKS.start - 1,
+                SENDER_RECOVERY_TOKEN,
+                log()
+            ),
             None
         );
         // at/after the upper bound, `from` supersedes log recovery
@@ -114,7 +117,10 @@ mod tests {
         );
         // a different (non-targeted) token, even though it emits a Transfer
         let other = vec![transfer_log(OTHER_TOKEN, HOLDER_B, HOLDER_A)];
-        assert_eq!(recover(TESTNET_CHAIN_ID, SENDER_RECOVERY_BLOCKS.start, OTHER_TOKEN, other), None);
+        assert_eq!(
+            recover(TESTNET_CHAIN_ID, SENDER_RECOVERY_BLOCKS.start, OTHER_TOKEN, other),
+            None
+        );
     }
 
     #[test]
@@ -134,9 +140,12 @@ mod tests {
             ),
         };
         assert_eq!(
-            recover(TESTNET_CHAIN_ID, SENDER_RECOVERY_BLOCKS.start, SENDER_RECOVERY_TOKEN, vec![
-                approval
-            ]),
+            recover(
+                TESTNET_CHAIN_ID,
+                SENDER_RECOVERY_BLOCKS.start,
+                SENDER_RECOVERY_TOKEN,
+                vec![approval]
+            ),
             None
         );
     }
