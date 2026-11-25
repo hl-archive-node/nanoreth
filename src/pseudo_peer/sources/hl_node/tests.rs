@@ -306,6 +306,60 @@ async fn test_fallback_keeps_up_while_hl_node_is_behind() -> eyre::Result<()> {
     Ok(())
 }
 
+fn write_hourly_file(
+    root: &Path,
+    dt: OffsetDateTime,
+    blocks: &[&LocalBlockAndReceipts],
+) -> eyre::Result<()> {
+    let path = root
+        .join(HOURLY_SUBDIR)
+        .join(TimeUtils::date_from_datetime(dt))
+        .join(format!("{}", dt.hour()));
+    std::fs::create_dir_all(path.parent().unwrap())?;
+    let mut file = std::fs::File::create(path)?;
+    for block in blocks {
+        writeln!(&mut file, "{}", serde_json::to_string(block)?)?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn ingest_loop_follows_past_an_hour_without_a_file() -> eyre::Result<()> {
+    let temp_dir = tempfile::tempdir()?;
+    let start = OffsetDateTime::now_utc() - Duration::from_secs(3 * 60 * 60);
+    let block_0 = empty_block(1000000, 1722633600, b"hl-node");
+    let block_1 = empty_block(1000001, 1722633601, b"hl-node");
+    write_hourly_file(temp_dir.path(), start, &[&block_0])?;
+
+    let block_source = HlNodeBlockSource::new(
+        BlockSourceBoxed::new(Box::new(LocalBlockSource::new("/nonexistent"))),
+        HlNodeBlockSourceArgs {
+            root: temp_dir.path().to_path_buf(),
+            fallback_threshold: DEFAULT_FALLBACK_THRESHOLD_FOR_TEST,
+        },
+        1000000,
+    )
+    .await;
+    assert_eq!(block_source.collect_block(1000000).await?, block_0.1);
+
+    // Let the ingest loop start following the first file.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // hl-node writes nothing for the next hour, then resumes an hour later.
+    write_hourly_file(temp_dir.path(), start + Duration::from_secs(2 * 60 * 60), &[&block_1])?;
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Ok(block) = block_source.collect_block(1000001).await {
+            assert_eq!(block, block_1.1);
+            break;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "ingest loop never moved past the gap");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    Ok(())
+}
+
 #[test]
 fn test_hourly_files_sort() -> eyre::Result<()> {
     let temp_dir = tempfile::tempdir()?;
