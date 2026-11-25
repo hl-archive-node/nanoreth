@@ -1,11 +1,17 @@
 use super::{HlEthApi, HlRpcNodeCore, rpc_gas_ceiling};
+use crate::{
+    evm::spec::HlSpecId,
+    node::evm::{
+        apply_precompiles_with_forwarder, mrb, read_precompile_forwarder::read_precompile_forwarder,
+    },
+};
 use alloy_evm::overrides::{StateOverrideError, apply_block_overrides, apply_state_overrides};
 use alloy_network::TransactionBuilder;
 use alloy_primitives::{TxKind, U256};
 use alloy_rpc_types_eth::state::EvmOverrides;
 use reth_chainspec::MIN_TRANSACTION_GAS;
 use reth_errors::ProviderError;
-use reth_evm::{ConfigureEvm, Evm, EvmEnvFor, TransactionEnvMut, env::BlockEnvironment};
+use reth_evm::{ConfigureEvm, Evm, EvmEnvFor, SpecFor, TransactionEnvMut, env::BlockEnvironment};
 use reth_revm::{
     database::StateProviderDatabase,
     db::{State, bal::EvmDatabaseError},
@@ -39,6 +45,7 @@ where
     Self: Call,
     N: HlRpcNodeCore,
     EthApiError: FromEvmError<N::Evm>,
+    SpecFor<<Self as RpcNodeCore>::Evm>: From<HlSpecId>,
     Rpc: RpcConvert<Primitives = N::Primitives, Error = EthApiError, Evm = N::Evm>,
 {
     // Modified version of the upstream implementation; upstream
@@ -68,9 +75,19 @@ where
 
         let mut db = State::builder().with_database(StateProviderDatabase::new(state)).build();
 
+        let state_block_number: u64 = evm_env.block_env.number().saturating_to();
         if let Some(block_overrides) = overrides.block {
             apply_block_overrides(*block_overrides, &mut db, evm_env.block_env.inner_mut());
+            // As in `prepare_call_env`: precompile prices follow the overridden block number.
+            evm_env.cfg_env.spec =
+                mrb::spec_at(evm_env.cfg_env.chain_id, evm_env.block_env.number().saturating_to())
+                    .into();
         }
+        // As in `Call::transact`: with the forwarder on, an overridden block number still reads
+        // the state block's precompile data rather than forwarding for the overridden one.
+        let pinned_state_block = (read_precompile_forwarder().is_some()
+            && evm_env.block_env.number() != U256::from(state_block_number))
+        .then_some(state_block_number);
 
         if let Some(state_override) = overrides.state {
             apply_state_overrides(state_override, &mut db).map_err(
@@ -124,8 +141,12 @@ where
         // `create_txn_env` defaults a missing gas limit to the block gas limit, so set it here.
         tx_env.set_gas_limit(highest_gas_limit);
 
-        // The RPC EVM factory installs the block\'s read precompiles.
+        // The RPC EVM factory installs the block's read precompiles.
         let mut evm = self.evm_config().evm_with_env(&mut db, evm_env);
+        if let Some(block_number) = pinned_state_block {
+            let (hl_extras, forwarder) = self.hl_call_precompiles(block_number)?;
+            apply_precompiles_with_forwarder(&mut evm, &hl_extras, forwarder);
+        }
 
         if is_basic_transfer {
             let mut min_tx_env = tx_env.clone();
