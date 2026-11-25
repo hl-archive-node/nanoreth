@@ -463,7 +463,8 @@ where
                 parent_beacon_block_root: attributes.parent_beacon_block_root,
                 ommers: &[],
                 withdrawals: attributes.withdrawals.map(|w| Cow::Owned(w.into_inner())),
-                extra_data: Default::default(),
+                // The block assembler takes extraData from here, so keep the configured value.
+                extra_data: attributes.extra_data,
                 slot_number: None,
                 tx_count_hint: None,
             },
