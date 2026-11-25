@@ -17,7 +17,7 @@ use jsonrpsee::{
 };
 use jsonrpsee_core::{ClientError, client::ClientT};
 use parking_lot::{Condvar, Mutex};
-use revm::precompile::{PrecompileError, PrecompileOutput, PrecompileResult};
+use revm::precompile::{PrecompileError, PrecompileHalt, PrecompileOutput, PrecompileResult};
 use std::{
     collections::HashMap,
     num::NonZeroU32,
@@ -161,6 +161,7 @@ impl ReadPrecompileForwarder {
         address: Address,
         input: &[u8],
         gas_limit: u64,
+        reservoir: u64,
         block_number: u64,
         head_hash: B256,
     ) -> PrecompileResult {
@@ -169,13 +170,13 @@ impl ReadPrecompileForwarder {
             Response::Output(bytes) => {
                 let gas_used = read_precompile_gas(input.len(), bytes.len());
                 if gas_used > gas_limit {
-                    return Err(PrecompileError::OutOfGas);
+                    return Ok(PrecompileOutput::halt(PrecompileHalt::OutOfGas, reservoir));
                 }
-                Ok(PrecompileOutput { gas_used, bytes, reverted: false })
+                Ok(PrecompileOutput::new(gas_used, bytes, reservoir))
             }
             // HL burns the whole gas limit when a read precompile rejects its input, which is
             // also how `ReadPrecompileResult::Error` is replayed for recorded blocks.
-            Response::Rejected => Err(PrecompileError::OutOfGas),
+            Response::Rejected => Ok(PrecompileOutput::halt(PrecompileHalt::OutOfGas, reservoir)),
         }
     }
 
@@ -395,26 +396,26 @@ mod tests {
         // Precompiles run on blocking workers, which is what the forwarder expects.
         tokio::task::spawn_blocking(move || {
             let head_hash = B256::repeat_byte(1);
-            let output = forwarder.call(L1_BLOCK_NUMBER, &[], 1_000_000, 1, head_hash).unwrap();
+            let output = forwarder.call(L1_BLOCK_NUMBER, &[], 1_000_000, 0, 1, head_hash).unwrap();
             assert_eq!(output.bytes.len(), 32);
             assert_eq!(output.gas_used, read_precompile_gas(0, 32));
 
             // A gas limit one short of the cost is not enough to run the precompile.
             assert!(matches!(
-                forwarder.call(L1_BLOCK_NUMBER, &[], output.gas_used - 1, 1, head_hash),
-                Err(PrecompileError::OutOfGas)
+                forwarder.call(L1_BLOCK_NUMBER, &[], output.gas_used - 1, 0, 1, head_hash),
+                Ok(output) if output.halt_reason() == Some(&PrecompileHalt::OutOfGas)
             ));
 
             // An input the precompile rejects burns the gas limit rather than returning bytes.
             assert!(matches!(
-                forwarder.call(L1_BLOCK_NUMBER, &[0xde, 0xad], 1_000_000, 1, head_hash),
-                Err(PrecompileError::OutOfGas)
+                forwarder.call(L1_BLOCK_NUMBER, &[0xde, 0xad], 1_000_000, 0, 1, head_hash),
+                Ok(output) if output.halt_reason() == Some(&PrecompileHalt::OutOfGas)
             ));
 
             // The frame that reverted in #142: a Multicall3 batch reached `bbo` on a block that
             // had recorded no call to it. Priced at 4168 gas on mainnet, which is what a direct
             // call to it costs.
-            let output = forwarder.call(BBO, &BBO_INPUT, 1_000_000, 1, head_hash).unwrap();
+            let output = forwarder.call(BBO, &BBO_INPUT, 1_000_000, 0, 1, head_hash).unwrap();
             assert_eq!(output.bytes.len(), 64);
             assert_eq!(output.gas_used, read_precompile_gas(BBO_INPUT.len(), 64));
         })

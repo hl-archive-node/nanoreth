@@ -1,8 +1,8 @@
 use reth_ethereum_primitives::Receipt;
-use reth_primitives::NodePrimitives;
+use reth_primitives_traits::NodePrimitives;
 
 pub mod transaction;
-pub use transaction::TransactionSigned;
+pub use transaction::{HlTxType, TransactionSigned};
 
 pub mod block;
 pub use block::HlBlock;
@@ -12,7 +12,6 @@ pub mod header;
 pub use header::HlHeader;
 
 pub mod rlp;
-pub mod serde_bincode_compat;
 
 /// Primitive types for HyperEVM.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

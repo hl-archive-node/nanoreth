@@ -42,11 +42,13 @@ pub type BlockBody = alloy_consensus::BlockBody<TransactionSigned, HlHeader>;
 
 impl InMemorySize for HlBlockBody {
     fn size(&self) -> usize {
-        self.inner.size() +
-            self.sidecars
+        self.inner.size()
+            + self
+                .sidecars
                 .as_ref()
-                .map_or(0, |s| s.capacity() * core::mem::size_of::<BlobTransactionSidecar>()) +
-            self.read_precompile_calls
+                .map_or(0, |s| s.capacity() * core::mem::size_of::<BlobTransactionSidecar>())
+            + self
+                .read_precompile_calls
                 .as_ref()
                 .map_or(0, |s| s.0.capacity() * core::mem::size_of::<ReadPrecompileCall>())
     }

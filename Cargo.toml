@@ -26,72 +26,77 @@ lto = "fat"
 codegen-units = 1
 
 [dependencies]
-reth = { git = "https://github.com/hl-archive-node/reth", rev = "14509628ed37e9a9b7110ea855a67f427c4d61fc" }
-reth-cli = { git = "https://github.com/hl-archive-node/reth", rev = "14509628ed37e9a9b7110ea855a67f427c4d61fc" }
-reth-cli-commands = { git = "https://github.com/hl-archive-node/reth", rev = "14509628ed37e9a9b7110ea855a67f427c4d61fc" }
-reth-basic-payload-builder = { git = "https://github.com/hl-archive-node/reth", rev = "14509628ed37e9a9b7110ea855a67f427c4d61fc" }
-reth-db = { git = "https://github.com/hl-archive-node/reth", rev = "14509628ed37e9a9b7110ea855a67f427c4d61fc" }
-reth-db-api = { git = "https://github.com/hl-archive-node/reth", rev = "14509628ed37e9a9b7110ea855a67f427c4d61fc" }
-reth-chainspec = { git = "https://github.com/hl-archive-node/reth", rev = "14509628ed37e9a9b7110ea855a67f427c4d61fc" }
-reth-cli-util = { git = "https://github.com/hl-archive-node/reth", rev = "14509628ed37e9a9b7110ea855a67f427c4d61fc" }
-reth-discv4 = { git = "https://github.com/hl-archive-node/reth", rev = "14509628ed37e9a9b7110ea855a67f427c4d61fc" }
-reth-engine-primitives = { git = "https://github.com/hl-archive-node/reth", rev = "14509628ed37e9a9b7110ea855a67f427c4d61fc" }
-reth-ethereum-forks = { git = "https://github.com/hl-archive-node/reth", rev = "14509628ed37e9a9b7110ea855a67f427c4d61fc" }
-reth-ethereum-payload-builder = { git = "https://github.com/hl-archive-node/reth", rev = "14509628ed37e9a9b7110ea855a67f427c4d61fc" }
-reth-ethereum-primitives = { git = "https://github.com/hl-archive-node/reth", rev = "14509628ed37e9a9b7110ea855a67f427c4d61fc" }
-reth-eth-wire = { git = "https://github.com/hl-archive-node/reth", rev = "14509628ed37e9a9b7110ea855a67f427c4d61fc" }
-reth-eth-wire-types = { git = "https://github.com/hl-archive-node/reth", rev = "14509628ed37e9a9b7110ea855a67f427c4d61fc" }
-reth-evm = { git = "https://github.com/hl-archive-node/reth", rev = "14509628ed37e9a9b7110ea855a67f427c4d61fc" }
-reth-evm-ethereum = { git = "https://github.com/hl-archive-node/reth", rev = "14509628ed37e9a9b7110ea855a67f427c4d61fc" }
-reth-node-core = { git = "https://github.com/hl-archive-node/reth", rev = "14509628ed37e9a9b7110ea855a67f427c4d61fc" }
-reth-revm = { git = "https://github.com/hl-archive-node/reth", rev = "14509628ed37e9a9b7110ea855a67f427c4d61fc" }
-reth-network = { git = "https://github.com/hl-archive-node/reth", rev = "14509628ed37e9a9b7110ea855a67f427c4d61fc" }
-reth-network-p2p = { git = "https://github.com/hl-archive-node/reth", rev = "14509628ed37e9a9b7110ea855a67f427c4d61fc" }
-reth-network-api = { git = "https://github.com/hl-archive-node/reth", rev = "14509628ed37e9a9b7110ea855a67f427c4d61fc" }
-reth-node-ethereum = { git = "https://github.com/hl-archive-node/reth", rev = "14509628ed37e9a9b7110ea855a67f427c4d61fc" }
-reth-network-peers = { git = "https://github.com/hl-archive-node/reth", rev = "14509628ed37e9a9b7110ea855a67f427c4d61fc" }
-reth-payload-primitives = { git = "https://github.com/hl-archive-node/reth", rev = "14509628ed37e9a9b7110ea855a67f427c4d61fc" }
-reth-primitives = { git = "https://github.com/hl-archive-node/reth", rev = "14509628ed37e9a9b7110ea855a67f427c4d61fc" }
-reth-primitives-traits = { git = "https://github.com/hl-archive-node/reth", rev = "14509628ed37e9a9b7110ea855a67f427c4d61fc" }
-reth-provider = { git = "https://github.com/hl-archive-node/reth", rev = "14509628ed37e9a9b7110ea855a67f427c4d61fc", features = ["test-utils"] }
-reth-rpc = { git = "https://github.com/hl-archive-node/reth", rev = "14509628ed37e9a9b7110ea855a67f427c4d61fc" }
-reth-rpc-eth-api = { git = "https://github.com/hl-archive-node/reth", rev = "14509628ed37e9a9b7110ea855a67f427c4d61fc" }
-reth-rpc-engine-api = { git = "https://github.com/hl-archive-node/reth", rev = "14509628ed37e9a9b7110ea855a67f427c4d61fc" }
-reth-tracing = { git = "https://github.com/hl-archive-node/reth", rev = "14509628ed37e9a9b7110ea855a67f427c4d61fc" }
-reth-trie-common = { git = "https://github.com/hl-archive-node/reth", rev = "14509628ed37e9a9b7110ea855a67f427c4d61fc" }
-reth-trie-db = { git = "https://github.com/hl-archive-node/reth", rev = "14509628ed37e9a9b7110ea855a67f427c4d61fc" }
-reth-codecs = { git = "https://github.com/hl-archive-node/reth", rev = "14509628ed37e9a9b7110ea855a67f427c4d61fc" }
-reth-transaction-pool = { git = "https://github.com/hl-archive-node/reth", rev = "14509628ed37e9a9b7110ea855a67f427c4d61fc" }
-reth-stages-types = { git = "https://github.com/hl-archive-node/reth", rev = "14509628ed37e9a9b7110ea855a67f427c4d61fc" }
-reth-storage-api = { git = "https://github.com/hl-archive-node/reth", rev = "14509628ed37e9a9b7110ea855a67f427c4d61fc" }
-reth-errors = { git = "https://github.com/hl-archive-node/reth", rev = "14509628ed37e9a9b7110ea855a67f427c4d61fc" }
-reth-rpc-convert = { git = "https://github.com/hl-archive-node/reth", rev = "14509628ed37e9a9b7110ea855a67f427c4d61fc" }
-reth-rpc-eth-types = { git = "https://github.com/hl-archive-node/reth", rev = "14509628ed37e9a9b7110ea855a67f427c4d61fc" }
-reth-rpc-server-types = { git = "https://github.com/hl-archive-node/reth", rev = "14509628ed37e9a9b7110ea855a67f427c4d61fc" }
-reth-metrics = { git = "https://github.com/hl-archive-node/reth", rev = "14509628ed37e9a9b7110ea855a67f427c4d61fc" }
-reth-rpc-builder = { git = "https://github.com/hl-archive-node/reth", rev = "14509628ed37e9a9b7110ea855a67f427c4d61fc" }
-reth-ipc = { git = "https://github.com/hl-archive-node/reth", rev = "14509628ed37e9a9b7110ea855a67f427c4d61fc" }
-reth-rpc-layer = { git = "https://github.com/hl-archive-node/reth", rev = "14509628ed37e9a9b7110ea855a67f427c4d61fc" }
-revm = { version = "29.0.1", default-features = false }
+reth = { git = "https://github.com/hl-archive-node/reth", rev = "c6e0a06b6f2739b63ccd625823d17d333bfdc31b", default-features = false, features = ["gmp"] }
+reth-cli = { git = "https://github.com/hl-archive-node/reth", rev = "c6e0a06b6f2739b63ccd625823d17d333bfdc31b" }
+reth-cli-commands = { git = "https://github.com/hl-archive-node/reth", rev = "c6e0a06b6f2739b63ccd625823d17d333bfdc31b" }
+reth-basic-payload-builder = { git = "https://github.com/hl-archive-node/reth", rev = "c6e0a06b6f2739b63ccd625823d17d333bfdc31b" }
+reth-db = { git = "https://github.com/hl-archive-node/reth", rev = "c6e0a06b6f2739b63ccd625823d17d333bfdc31b" }
+reth-db-api = { git = "https://github.com/hl-archive-node/reth", rev = "c6e0a06b6f2739b63ccd625823d17d333bfdc31b" }
+reth-chainspec = { git = "https://github.com/hl-archive-node/reth", rev = "c6e0a06b6f2739b63ccd625823d17d333bfdc31b" }
+reth-cli-util = { git = "https://github.com/hl-archive-node/reth", rev = "c6e0a06b6f2739b63ccd625823d17d333bfdc31b" }
+reth-discv4 = { git = "https://github.com/hl-archive-node/reth", rev = "c6e0a06b6f2739b63ccd625823d17d333bfdc31b" }
+reth-engine-primitives = { git = "https://github.com/hl-archive-node/reth", rev = "c6e0a06b6f2739b63ccd625823d17d333bfdc31b" }
+reth-ethereum-forks = { git = "https://github.com/hl-archive-node/reth", rev = "c6e0a06b6f2739b63ccd625823d17d333bfdc31b" }
+reth-ethereum-payload-builder = { git = "https://github.com/hl-archive-node/reth", rev = "c6e0a06b6f2739b63ccd625823d17d333bfdc31b" }
+reth-ethereum-primitives = { git = "https://github.com/hl-archive-node/reth", rev = "c6e0a06b6f2739b63ccd625823d17d333bfdc31b" }
+reth-eth-wire = { git = "https://github.com/hl-archive-node/reth", rev = "c6e0a06b6f2739b63ccd625823d17d333bfdc31b" }
+reth-eth-wire-types = { git = "https://github.com/hl-archive-node/reth", rev = "c6e0a06b6f2739b63ccd625823d17d333bfdc31b" }
+reth-evm = { git = "https://github.com/hl-archive-node/reth", rev = "c6e0a06b6f2739b63ccd625823d17d333bfdc31b" }
+reth-evm-ethereum = { git = "https://github.com/hl-archive-node/reth", rev = "c6e0a06b6f2739b63ccd625823d17d333bfdc31b" }
+reth-node-core = { git = "https://github.com/hl-archive-node/reth", rev = "c6e0a06b6f2739b63ccd625823d17d333bfdc31b" }
+reth-revm = { git = "https://github.com/hl-archive-node/reth", rev = "c6e0a06b6f2739b63ccd625823d17d333bfdc31b", features = ["portable"] }
+reth-network = { git = "https://github.com/hl-archive-node/reth", rev = "c6e0a06b6f2739b63ccd625823d17d333bfdc31b" }
+reth-network-p2p = { git = "https://github.com/hl-archive-node/reth", rev = "c6e0a06b6f2739b63ccd625823d17d333bfdc31b" }
+reth-network-api = { git = "https://github.com/hl-archive-node/reth", rev = "c6e0a06b6f2739b63ccd625823d17d333bfdc31b" }
+reth-node-ethereum = { git = "https://github.com/hl-archive-node/reth", rev = "c6e0a06b6f2739b63ccd625823d17d333bfdc31b" }
+reth-network-peers = { git = "https://github.com/hl-archive-node/reth", rev = "c6e0a06b6f2739b63ccd625823d17d333bfdc31b" }
+reth-payload-primitives = { git = "https://github.com/hl-archive-node/reth", rev = "c6e0a06b6f2739b63ccd625823d17d333bfdc31b" }
+reth-primitives-traits = { version = "0.8.2", default-features = false }
+reth-provider = { git = "https://github.com/hl-archive-node/reth", rev = "c6e0a06b6f2739b63ccd625823d17d333bfdc31b", features = ["test-utils"] }
+reth-rpc = { git = "https://github.com/hl-archive-node/reth", rev = "c6e0a06b6f2739b63ccd625823d17d333bfdc31b" }
+reth-rpc-eth-api = { git = "https://github.com/hl-archive-node/reth", rev = "c6e0a06b6f2739b63ccd625823d17d333bfdc31b" }
+reth-rpc-engine-api = { git = "https://github.com/hl-archive-node/reth", rev = "c6e0a06b6f2739b63ccd625823d17d333bfdc31b" }
+reth-tracing = { git = "https://github.com/hl-archive-node/reth", rev = "c6e0a06b6f2739b63ccd625823d17d333bfdc31b" }
+reth-trie-common = { git = "https://github.com/hl-archive-node/reth", rev = "c6e0a06b6f2739b63ccd625823d17d333bfdc31b" }
+reth-trie-db = { git = "https://github.com/hl-archive-node/reth", rev = "c6e0a06b6f2739b63ccd625823d17d333bfdc31b" }
+reth-codecs = { version = "0.8.2", default-features = false }
+reth-transaction-pool = { git = "https://github.com/hl-archive-node/reth", rev = "c6e0a06b6f2739b63ccd625823d17d333bfdc31b" }
+reth-stages-types = { git = "https://github.com/hl-archive-node/reth", rev = "c6e0a06b6f2739b63ccd625823d17d333bfdc31b" }
+reth-storage-api = { git = "https://github.com/hl-archive-node/reth", rev = "c6e0a06b6f2739b63ccd625823d17d333bfdc31b" }
+reth-errors = { git = "https://github.com/hl-archive-node/reth", rev = "c6e0a06b6f2739b63ccd625823d17d333bfdc31b" }
+reth-rpc-convert = { git = "https://github.com/hl-archive-node/reth", rev = "c6e0a06b6f2739b63ccd625823d17d333bfdc31b" }
+reth-rpc-eth-types = { git = "https://github.com/hl-archive-node/reth", rev = "c6e0a06b6f2739b63ccd625823d17d333bfdc31b" }
+reth-rpc-server-types = { git = "https://github.com/hl-archive-node/reth", rev = "c6e0a06b6f2739b63ccd625823d17d333bfdc31b" }
+reth-metrics = { git = "https://github.com/hl-archive-node/reth", rev = "c6e0a06b6f2739b63ccd625823d17d333bfdc31b" }
+reth-rpc-builder = { git = "https://github.com/hl-archive-node/reth", rev = "c6e0a06b6f2739b63ccd625823d17d333bfdc31b" }
+reth-ipc = { git = "https://github.com/hl-archive-node/reth", rev = "c6e0a06b6f2739b63ccd625823d17d333bfdc31b" }
+reth-rpc-layer = { git = "https://github.com/hl-archive-node/reth", rev = "c6e0a06b6f2739b63ccd625823d17d333bfdc31b" }
+# `memory_limit` makes revm enforce `CfgEnv::memory_limit` (default 4 GiB - 1, set for RPC calls
+# from `--rpc.evm-memory-limit`). Without it the limit is `u64::MAX`, and a call with enough gas can
+# grow memory until the size computation in a nested frame wraps. reth-rpc-eth-api enables it too;
+# it is named here so nanoreth does not depend on feature unification for it. No block can pay for
+# 4 GiB of memory, so the limit does not change consensus.
+revm = { version = "43.0.3", default-features = false, features = ["memory_limit"] }
 
 # alloy dependencies
-alloy-genesis = { version = "1.0.37", default-features = false }
-alloy-consensus = { version = "1.0.37", default-features = false }
-alloy-chains = { version = "0.2.5", default-features = false }
-alloy-eips = { version = "1.0.37", default-features = false }
-alloy-evm = { version = "0.21.0", default-features = false }
-alloy-json-abi = { version = "1.3.1", default-features = false }
-alloy-json-rpc = { version = "1.0.37", default-features = false }
-alloy-dyn-abi = "1.3.1"
-alloy-network = { version = "1.0.37", default-features = false }
-alloy-primitives = { version = "1.3.1", default-features = false, features = ["map-foldhash"] }
-alloy-rlp = { version = "0.3.10", default-features = false, features = ["core-net"] }
-alloy-rpc-types = { version = "1.0.37", features = ["eth"], default-features = false }
-alloy-rpc-types-eth = { version = "1.0.37", default-features = false }
-alloy-rpc-types-engine = { version = "1.0.37", default-features = false }
-alloy-signer = { version = "1.0.37", default-features = false }
-alloy-sol-macro = "1.3.1"
-alloy-sol-types = { version = "1.3.1", default-features = false }
+alloy-genesis = { version = "2.5.0", default-features = false }
+alloy-consensus = { version = "2.5.0", default-features = false }
+alloy-chains = { version = "0.2.33", default-features = false }
+alloy-eips = { version = "2.5.0", default-features = false }
+alloy-evm = { version = "0.39.0", default-features = false }
+alloy-json-abi = { version = "1.6.1", default-features = false }
+alloy-json-rpc = { version = "2.5.0", default-features = false }
+alloy-dyn-abi = "1.6.1"
+alloy-network = { version = "2.5.0", default-features = false }
+alloy-primitives = { version = "1.6.1", default-features = false, features = ["map-foldhash"] }
+alloy-rlp = { version = "0.3.16", default-features = false, features = ["core-net"] }
+alloy-rpc-types = { version = "2.5.0", features = ["eth"], default-features = false }
+alloy-rpc-types-eth = { version = "2.5.0", default-features = false }
+alloy-rpc-types-engine = { version = "2.5.0", default-features = false }
+alloy-serde = { version = "2.5.0", default-features = false }
+alloy-signer = { version = "2.5.0", default-features = false }
+alloy-sol-macro = "1.6.1"
+alloy-sol-types = { version = "1.6.1", default-features = false }
 
 jsonrpsee = "0.26.0"
 jsonrpsee-core = "0.26.0"
@@ -109,7 +114,7 @@ futures = "0.3"
 lazy_static = "1.4.0"
 once_cell = { version = "1.19", default-features = false, features = ["critical-section"] }
 parking_lot = "0.12"
-revm-inspectors = "0.30.0"
+revm-inspectors = "0.44.3"
 serde = { version = "1.0", features = ["derive"], default-features = false }
 serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
 thiserror = { version = "2.0.0", default-features = false }
@@ -117,7 +122,7 @@ tokio = { version = "1.44.2", features = ["full"] }
 tokio-stream = "0.1.11"
 tracing = { version = "0.1.0", default-features = false }
 rmp-serde = "1.3"
-lz4_flex = "0.11"
+lz4_flex = "0.12"
 ureq = "3.0.12"
 backon = { version = "1.5.2", default-features = false, features = ["std-blocking-sleep", "tokio-sleep"] }
 aws-sdk-s3 = "1.93.0"
@@ -131,16 +136,15 @@ tower-http = { version = "0.6", features = ["cors"] }
 
 
 [target.'cfg(unix)'.dependencies]
-tikv-jemalloc-ctl = "0.6"
 tikv-jemallocator = { version = "0.6", optional = true }
 libc = "0.2"
 
 [features]
 default = ["jemalloc"]
 jemalloc = ["dep:tikv-jemallocator"]
+
 asm-keccak = [
     "reth-node-core/asm-keccak",
-    "reth-primitives/asm-keccak",
 ]
 min-debug-logs = [
     "tracing/release_max_level_debug",
@@ -183,25 +187,5 @@ client = [
 tempfile = "3.20.0"
 
 [build-dependencies]
-vergen = { version = "9.0.4", features = ["build", "cargo", "emit_and_set"] }
-vergen-git2 = "1.0.5"
-# Backport of bluealloy/revm#3805: the inspector could emit a SELFDESTRUCT callback built
-# from an unrelated journal entry, so callTracer and trace_replayTransaction reported
-# transfers that never happened. Execution, state and receipts are unaffected.
-#
-# All revm crates are pinned together: revm-inspector depends on its siblings by path
-# within the monorepo, so patching it alone pulls in duplicate copies and fails to
-# compile. Drop this block once reth carries the fix.
-[patch.crates-io]
-revm = { git = "https://github.com/hl-archive-node/revm", rev = "fdf9b16bdd4388a680c97440c6e7f085647ece01" }
-revm-bytecode = { git = "https://github.com/hl-archive-node/revm", rev = "fdf9b16bdd4388a680c97440c6e7f085647ece01" }
-revm-context = { git = "https://github.com/hl-archive-node/revm", rev = "fdf9b16bdd4388a680c97440c6e7f085647ece01" }
-revm-context-interface = { git = "https://github.com/hl-archive-node/revm", rev = "fdf9b16bdd4388a680c97440c6e7f085647ece01" }
-revm-database = { git = "https://github.com/hl-archive-node/revm", rev = "fdf9b16bdd4388a680c97440c6e7f085647ece01" }
-revm-database-interface = { git = "https://github.com/hl-archive-node/revm", rev = "fdf9b16bdd4388a680c97440c6e7f085647ece01" }
-revm-handler = { git = "https://github.com/hl-archive-node/revm", rev = "fdf9b16bdd4388a680c97440c6e7f085647ece01" }
-revm-inspector = { git = "https://github.com/hl-archive-node/revm", rev = "fdf9b16bdd4388a680c97440c6e7f085647ece01" }
-revm-interpreter = { git = "https://github.com/hl-archive-node/revm", rev = "fdf9b16bdd4388a680c97440c6e7f085647ece01" }
-revm-precompile = { git = "https://github.com/hl-archive-node/revm", rev = "fdf9b16bdd4388a680c97440c6e7f085647ece01" }
-revm-primitives = { git = "https://github.com/hl-archive-node/revm", rev = "fdf9b16bdd4388a680c97440c6e7f085647ece01" }
-revm-state = { git = "https://github.com/hl-archive-node/revm", rev = "fdf9b16bdd4388a680c97440c6e7f085647ece01" }
+vergen = { version = "10.0.1", features = ["build", "cargo", "emit_and_set"] }
+vergen-git2 = "10.0.1"

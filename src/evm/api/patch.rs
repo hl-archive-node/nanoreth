@@ -7,8 +7,8 @@ use alloy_primitives::keccak256;
 use revm::{
     context::Host,
     interpreter::{
-        _count, InstructionContext, InterpreterTypes, as_u64_saturated, interpreter_types::StackTr,
-        popn_top,
+        InstructionContext, InstructionExecResult, InterpreterTypes, as_u64_saturated,
+        interpreter_types::StackTr, popn_top,
     },
     primitives::{BLOCK_HASH_HISTORY, U256},
 };
@@ -18,7 +18,7 @@ use revm::{
 /// Gets the hash of one of the 256 most recent complete blocks.
 pub fn blockhash_returning_placeholder<WIRE: InterpreterTypes, H: Host + ?Sized>(
     context: InstructionContext<'_, H, WIRE>,
-) {
+) -> InstructionExecResult {
     //gas!(context.interpreter, gas::BLOCKHASH);
     popn_top!([], number, context.interpreter);
 
@@ -27,7 +27,7 @@ pub fn blockhash_returning_placeholder<WIRE: InterpreterTypes, H: Host + ?Sized>
 
     let Some(diff) = block_number.checked_sub(requested_number) else {
         *number = U256::ZERO;
-        return;
+        return Ok(());
     };
 
     let diff = as_u64_saturated!(diff);
@@ -35,7 +35,7 @@ pub fn blockhash_returning_placeholder<WIRE: InterpreterTypes, H: Host + ?Sized>
     // blockhash should push zero if number is same as current block number.
     if diff == 0 {
         *number = U256::ZERO;
-        return;
+        return Ok(());
     }
 
     *number = if diff <= BLOCK_HASH_HISTORY {
@@ -45,5 +45,6 @@ pub fn blockhash_returning_placeholder<WIRE: InterpreterTypes, H: Host + ?Sized>
         U256::from_be_bytes(hash.0)
     } else {
         U256::ZERO
-    }
+    };
+    Ok(())
 }

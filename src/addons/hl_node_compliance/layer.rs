@@ -55,9 +55,10 @@ fn parse_hl_query(query: Option<&str>, default: bool) -> bool {
     for pair in query.split('&') {
         let mut parts = pair.splitn(2, '=');
         if let (Some(key), Some(value)) = (parts.next(), parts.next())
-            && key == "hl" {
-                return value == "true" || value == "1";
-            }
+            && key == "hl"
+        {
+            return value == "true" || value == "1";
+        }
     }
     default
 }

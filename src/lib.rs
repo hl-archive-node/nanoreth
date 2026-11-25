@@ -1,7 +1,7 @@
 pub mod addons;
 pub mod chainspec;
 pub mod consensus;
-mod evm;
+pub mod evm;
 mod hardforks;
 pub mod node;
 pub mod pseudo_peer;

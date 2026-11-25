@@ -11,6 +11,7 @@ use crate::{
     },
     pseudo_peer::{BlockSourceConfig, DbBlockNumberFn, start_pseudo_peer},
 };
+use alloy_chains::Chain;
 use alloy_primitives::B256;
 use alloy_rlp::{Decodable, Encodable};
 use alloy_rpc_types::engine::ForkchoiceState;
@@ -26,7 +27,6 @@ use reth_eth_wire::{BasicNetworkPrimitives, NewBlock, NewBlockPayload};
 use reth_ethereum_primitives::PooledTransactionVariant;
 use reth_network::{NetworkConfig, NetworkHandle, NetworkManager};
 use reth_network_api::PeersInfo;
-use reth_payload_primitives::EngineApiMessageVersion;
 use reth_provider::StageCheckpointReader;
 use reth_stages_types::StageId;
 use reth_storage_api::{BlockIdReader, BlockNumReader};
@@ -35,7 +35,7 @@ use std::{
     sync::Arc,
 };
 use tokio::sync::{Mutex, mpsc, oneshot};
-use tracing::info;
+use tracing::{info, warn};
 
 pub mod block_import;
 
@@ -179,7 +179,7 @@ impl HlNetworkBuilder {
         let consensus =
             Arc::new(HlConsensus { provider: ctx.provider().clone(), finalization_policy });
 
-        ctx.task_executor().spawn_critical("block import", async move {
+        ctx.task_executor().spawn_critical_task("block import", async move {
             let engine = self
                 .engine_handle_rx
                 .lock()
@@ -200,9 +200,7 @@ impl HlNetworkBuilder {
                     finalized = %state.finalized_block_hash,
                     "Sending initial forkchoice update to trigger pipeline"
                 );
-                let _ = engine
-                    .fork_choice_updated(state, None, EngineApiMessageVersion::default())
-                    .await;
+                let _ = engine.fork_choice_updated(state, None).await;
             }
 
             ImportService::new(consensus, engine, from_network, to_network).await.unwrap();
@@ -225,8 +223,21 @@ impl HlNetworkBuilder {
             .with_pow()
             .block_import(Box::new(HlBlockImport::new(handle)));
 
-        Ok(ctx.build_network_config(config_builder))
+        let mut config = ctx.build_network_config(config_builder);
+        config.status.chain = status_chain(config.status.chain);
+        Ok(config)
     }
+}
+
+/// The chain to advertise in the eth `Status`, in the form a peer decodes it to.
+///
+/// The handshake rejects a peer whose `Status` chain is not equal to ours, and [`Chain`] equality
+/// compares the representation: a peer decodes the chain id with [`Chain::from_id`], which yields
+/// `Named` for ids alloy-chains knows (998 became `HyperliquidTestnet`), while the testnet spec is
+/// built with [`Chain::from_id_unchecked`] so its datadir stays `998`. Advertising the decoded
+/// form keeps the two equal without renaming the datadir.
+pub(crate) fn status_chain(chain: Chain) -> Chain {
+    Chain::from_id(chain.id())
 }
 
 impl<Node, Pool> NetworkBuilder<Node, Pool> for HlNetworkBuilder
@@ -245,14 +256,14 @@ where
     async fn build_network(
         self,
         ctx: &BuilderContext<Node>,
-        pool: Pool,
+        _pool: Pool,
     ) -> eyre::Result<Self::Network> {
         let block_source_config = self.block_source_config.clone();
         let debug_cutoff_height = self.debug_cutoff_height;
         let (fcu_trigger_tx, fcu_trigger_rx) = oneshot::channel();
-        let handle = ctx.start_network(
+        let handle = start_network_without_txpool(
+            ctx,
             NetworkManager::builder(self.network_config(ctx, fcu_trigger_rx)?).await?,
-            pool,
         );
         let local_node_record = handle.local_node_record();
         let destination_network = handle.clone();
@@ -275,7 +286,8 @@ where
 
             let chain_spec = ctx.chain_spec();
             let finalization_policy = FinalizationPolicy::from_chain_id(chain_spec.chain().id());
-            ctx.task_executor().spawn_critical("pseudo peer", async move {
+            let pseudo_peer_runtime = ctx.task_executor().clone();
+            ctx.task_executor().spawn_critical_task("pseudo peer", async move {
                 let block_store = block_source_config
                     .create_block_store(
                         (*chain_spec).clone(),
@@ -288,7 +300,13 @@ where
                 // via a direct forkchoice update. This must happen before
                 // start_pseudo_peer (which never returns).
                 // get_by_number auto-indexes the block's hash AND parent hash.
-                if let Some(latest) = block_store.find_latest_block_number().await {
+                // `--debug-cutoff-height` bounds the sync target as well as the poller, so a
+                // capped run backfills to that height instead of chasing the real tip.
+                let latest = block_store
+                    .find_latest_block_number()
+                    .await
+                    .map(|latest| debug_cutoff_height.map_or(latest, |cutoff| latest.min(cutoff)));
+                if let Some(latest) = latest {
                     match block_store.get_by_number(latest).await {
                         Ok(block) => {
                             let head_block_hash = block.hash();
@@ -340,6 +358,7 @@ where
                     destination_network,
                     block_store,
                     debug_cutoff_height,
+                    pseudo_peer_runtime,
                 )
                 .await
                 .unwrap();
@@ -357,4 +376,62 @@ static BOOTNODES: [&str; 0] = [];
 
 pub fn boot_nodes() -> Vec<NodeRecord> {
     BOOTNODES[..].iter().map(|s| s.parse().unwrap()).collect()
+}
+
+/// Starts the network like [`BuilderContext::start_network`], minus the transactions manager.
+///
+/// HyperEVM has no mempool: the pool is a `NoopTransactionPool` and `eth_sendRawTransaction` is
+/// forwarded upstream, so the manager has no work. It is left out because reth 2.x's manager
+/// re-polls the no-op pool's pending transactions listener, which is closed from the start, on
+/// every wakeup and pins a core. Without a manager, peers' transaction messages are dropped.
+fn start_network_without_txpool<Node>(
+    ctx: &BuilderContext<Node>,
+    builder: reth_network::NetworkBuilder<(), (), HlNetworkPrimitives>,
+) -> NetworkHandle<HlNetworkPrimitives>
+where
+    Node: FullNodeTypes<Types = HlNode>,
+{
+    let (handle, network, (), eth) =
+        builder.request_handler(ctx.provider().clone()).split_with_handle();
+
+    ctx.task_executor().spawn_critical_blocking_task("p2p eth request handler", eth);
+
+    let known_peers_file =
+        ctx.config().network.persistent_peers_file(ctx.config().datadir().known_peers());
+    ctx.task_executor().spawn_critical_with_graceful_shutdown_signal(
+        "p2p network task",
+        |shutdown| {
+            network.run_until_graceful_shutdown(shutdown, |network| {
+                if let Some(peers_file) = known_peers_file {
+                    match network.write_peers_to_file(peers_file.as_path()) {
+                        Ok(_) => info!(target: "reth::cli", ?peers_file, "Wrote network peers to file"),
+                        Err(err) => {
+                            warn!(target: "reth::cli", %err, "Failed to write network peers to file")
+                        }
+                    }
+                }
+            })
+        },
+    );
+
+    handle
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::chainspec::hl::{hl_mainnet, hl_testnet};
+
+    #[test]
+    fn status_chain_matches_the_decoded_peer_chain() {
+        for spec in [hl_mainnet(), hl_testnet()] {
+            let chain = status_chain(spec.chain);
+            let encoded = alloy_rlp::encode(chain);
+            let decoded = Chain::decode(&mut encoded.as_slice()).unwrap();
+            assert_eq!(decoded, chain, "{chain} would fail the eth handshake");
+        }
+        // The spec itself is unchanged, so default datadirs keep their names.
+        assert_eq!(hl_testnet().chain.to_string(), "998");
+        assert_eq!(hl_mainnet().chain.to_string(), "hyperliquid");
+    }
 }

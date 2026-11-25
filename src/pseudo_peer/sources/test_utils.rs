@@ -33,6 +33,8 @@ pub fn block_with_parent(number: u64, marker: u8, parent_hash: B256) -> BlockAnd
                     excess_blob_gas: None,
                     parent_beacon_block_root: None,
                     requests_hash: None,
+                    block_access_list_hash: None,
+                    slot_number: None,
                 },
                 hash: B256::repeat_byte(marker),
             },

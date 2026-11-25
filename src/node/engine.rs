@@ -2,7 +2,7 @@ use crate::{HlBlock, HlPrimitives};
 use alloy_eips::eip7685::Requests;
 use alloy_primitives::U256;
 use reth_payload_primitives::BuiltPayload;
-use reth_primitives::SealedBlock;
+use reth_primitives_traits::SealedBlock;
 use std::sync::Arc;
 
 /// Built payload for Hl. This is similar to [`EthBuiltPayload`] but without sidecars as those

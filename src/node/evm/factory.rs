@@ -1,4 +1,4 @@
-use super::{HlEvm, mrb};
+use super::{HlEvm, ScopedReadPrecompileForwarder, apply_precompiles_with_forwarder, mrb};
 use crate::evm::{
     api::{
         builder::HlBuilder,
@@ -7,34 +7,79 @@ use crate::evm::{
     spec::HlSpecId,
     transaction::HlTxEnv,
 };
+use crate::node::types::HlExtras;
 use alloy_primitives::Address;
+use core::fmt;
 use reth_evm::{
     Database, EvmEnv, EvmFactory,
     precompiles::{DynPrecompile, Precompile, PrecompileInput, PrecompilesMap},
 };
 use reth_revm::Context;
+use revm::context::Block as _;
 use revm::{
     Inspector,
     context::{
-        TxEnv,
+        BlockEnv, TxEnv,
         result::{EVMError, HaltReason},
     },
+    database_interface::DBErrorMarker,
     inspector::NoOpInspector,
-    precompile::{PrecompileError, PrecompileId, PrecompileResult, PrecompileSpecId, Precompiles},
+    precompile::{
+        Precompile as RevmPrecompile, PrecompileHalt, PrecompileId, PrecompileOutput,
+        PrecompileResult, PrecompileSpecId, Precompiles,
+    },
 };
+use std::sync::Arc;
+
+/// Read precompile data an RPC EVM runs with, looked up by block number.
+///
+/// Block execution takes this data from the block body (`HlBlockExecutionCtx`). RPC paths have no
+/// body to hand, and reth creates many of their EVMs itself — tracers, access lists, `debug_*` —
+/// so the factory installs the data at creation instead.
+pub trait RpcPrecompileSource: Send + Sync + fmt::Debug {
+    /// Returns the data for an EVM executing at `block_number`, or `None` if it could not be read.
+    fn precompiles_at(
+        &self,
+        block_number: u64,
+    ) -> Option<(HlExtras, Option<ScopedReadPrecompileForwarder>)>;
+}
 
 /// Factory producing [`HlEvm`].
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone)]
 #[non_exhaustive]
-pub struct HlEvmFactory;
+pub struct HlEvmFactory {
+    /// Set only on the factory the RPC layer uses. Block execution leaves it unset: it installs
+    /// precompiles from the block body, and must not pay for a lookup per block.
+    rpc_precompiles: Option<Arc<dyn RpcPrecompileSource>>,
+}
+
+impl HlEvmFactory {
+    /// A factory that installs read precompiles from `source` on every EVM it creates.
+    pub fn with_rpc_precompiles(source: Arc<dyn RpcPrecompileSource>) -> Self {
+        Self { rpc_precompiles: Some(source) }
+    }
+
+    fn install_rpc_precompiles<DB: Database, I>(
+        &self,
+        evm: &mut HlEvm<DB, I, PrecompilesMap>,
+        block_number: u64,
+    ) where
+        I: Inspector<HlContext<DB>>,
+    {
+        let Some(source) = &self.rpc_precompiles else { return };
+        let (extras, forwarder) = source.precompiles_at(block_number).unwrap_or_default();
+        apply_precompiles_with_forwarder(evm, &extras, forwarder);
+    }
+}
 
 impl EvmFactory for HlEvmFactory {
     type Evm<DB: Database, I: Inspector<HlContext<DB>>> = HlEvm<DB, I, Self::Precompiles>;
     type Context<DB: Database> = HlContext<DB>;
     type Tx = HlTxEnv<TxEnv>;
-    type Error<DBError: core::error::Error + Send + Sync + 'static> = EVMError<DBError>;
+    type Error<DBError: DBErrorMarker> = EVMError<DBError>;
     type HaltReason = HaltReason;
     type Spec = HlSpecId;
+    type BlockEnv = BlockEnv;
     type Precompiles = PrecompilesMap;
 
     fn create_evm<DB: Database>(
@@ -43,15 +88,16 @@ impl EvmFactory for HlEvmFactory {
         input: EvmEnv<HlSpecId>,
     ) -> Self::Evm<DB, NoOpInspector> {
         let spec_id = *input.spec_id();
-        HlEvm {
-            inner: Context::hl()
-                .with_block(input.block_env)
-                .with_cfg(input.cfg_env)
-                .with_db(db)
-                .build_hl_with_inspector(NoOpInspector {})
-                .with_precompiles(hl_precompiles(spec_id)),
-            inspect: false,
-        }
+        let block_number = input.block_env.number().saturating_to();
+        let inner = Context::hl()
+            .with_block(input.block_env)
+            .with_cfg(input.cfg_env)
+            .with_db(db)
+            .build_hl_with_inspector(NoOpInspector {})
+            .with_precompiles(hl_precompiles(spec_id));
+        let mut evm = HlEvm { inner, inspect: false };
+        self.install_rpc_precompiles(&mut evm, block_number);
+        evm
     }
 
     fn create_evm_with_inspector<
@@ -64,15 +110,16 @@ impl EvmFactory for HlEvmFactory {
         inspector: I,
     ) -> Self::Evm<DB, I> {
         let spec_id = *input.spec_id();
-        HlEvm {
-            inner: Context::hl()
-                .with_block(input.block_env)
-                .with_cfg(input.cfg_env)
-                .with_db(db)
-                .build_hl_with_inspector(inspector)
-                .with_precompiles(hl_precompiles(spec_id)),
-            inspect: true,
-        }
+        let block_number = input.block_env.number().saturating_to();
+        let inner = Context::hl()
+            .with_block(input.block_env)
+            .with_cfg(input.cfg_env)
+            .with_db(db)
+            .build_hl_with_inspector(inspector)
+            .with_precompiles(hl_precompiles(spec_id));
+        let mut evm = HlEvm { inner, inspect: true };
+        self.install_rpc_precompiles(&mut evm, block_number);
+        evm
     }
 }
 
@@ -87,11 +134,14 @@ fn hl_precompiles(spec_id: HlSpecId) -> PrecompilesMap {
 }
 
 fn apply_mrb_precompiles(precompiles: &mut PrecompilesMap, builtin: &Precompiles) {
-    let osaka = &revm::precompile::modexp::OSAKA;
+    let osaka: RevmPrecompile = revm::precompile::modexp::OSAKA;
     let id = osaka.id().clone();
-    let implementation = *osaka.precompile();
-    precompiles
-        .apply_precompile(osaka.address(), |_| Some(DynPrecompile::from((id, implementation))));
+    let address = *osaka.address();
+    precompiles.apply_precompile(&address, |_| {
+        Some(DynPrecompile::from((id, move |input: PrecompileInput<'_>| {
+            osaka.execute(input.data, input.gas, input.reservoir)
+        })))
+    });
 
     for address in mrb::affected_precompile_addresses() {
         // Going dynamic renames every precompile to `Custom("closure")`; restore the builtin id.
@@ -133,7 +183,13 @@ fn run_mrb_precompile(
 ) -> PrecompileResult {
     input.gas /= multiplier;
     let mut output = precompile.call(input)?;
-    output.gas_used = output.gas_used.checked_mul(multiplier).ok_or(PrecompileError::OutOfGas)?;
+    // A halt carries no gas used; it already consumes the whole gas limit.
+    if !output.is_halt() {
+        let Some(gas_used) = output.gas_used.checked_mul(multiplier) else {
+            return Ok(PrecompileOutput::halt(PrecompileHalt::OutOfGas, output.reservoir));
+        };
+        output.gas_used = gas_used;
+    }
     Ok(output)
 }
 
@@ -154,11 +210,13 @@ mod tests {
         precompile.call(PrecompileInput {
             data,
             gas,
+            reservoir: 0,
             caller: Address::ZERO,
             value: U256::ZERO,
             target_address: address,
+            is_static: false,
             bytecode_address: address,
-            internals: EvmInternals::new(&mut ctx.journaled_state, &ctx.block),
+            internals: EvmInternals::new(&mut ctx.journaled_state, &ctx.block, &ctx.cfg, &ctx.tx),
         })
     }
 
@@ -167,7 +225,10 @@ mod tests {
         fn gas(base_len: u64, exp_len: u64, mod_len: u64, exp_highp: &U256) -> u64 {
             modexp::osaka_gas_calc(base_len, exp_len, mod_len, exp_highp).saturating_mul(10)
         }
-        modexp::run_inner::<_, true>(input, gas_limit, gas(0, 0, 0, &U256::ZERO), gas)
+        Ok(PrecompileOutput::from_eth_result(
+            modexp::run_inner::<_, true>(input, gas_limit, gas(0, 0, 0, &U256::ZERO), gas),
+            0,
+        ))
     }
 
     fn modexp_input(base_len: usize, exp: &[u8], mod_len: usize) -> Vec<u8> {
@@ -184,7 +245,7 @@ mod tests {
     #[test]
     fn v1_keeps_cancun_precompiles_pure() {
         let precompiles = hl_precompiles(HlSpecId::V1);
-        assert!(precompiles.get(secp256k1::ECRECOVER.address()).unwrap().is_pure());
+        assert!(precompiles.get(secp256k1::ECRECOVER.address()).unwrap().supports_caching());
     }
 
     #[test]
@@ -193,7 +254,7 @@ mod tests {
         let v2 = hl_precompiles(HlSpecId::V2);
         for address in mrb::affected_precompile_addresses() {
             let precompile = v2.get(&address).unwrap();
-            assert!(precompile.is_pure());
+            assert!(precompile.supports_caching());
             assert_eq!(precompile.precompile_id(), v1.get(&address).unwrap().precompile_id());
             assert!(!matches!(precompile.precompile_id(), PrecompileId::Custom(_)));
         }
@@ -213,7 +274,10 @@ mod tests {
             modexp_input(1025, &[1], 1),
         ];
         for input in &inputs {
-            let price = legacy_modexp(input, u64::MAX).map(|output| output.gas_used).ok();
+            let price = legacy_modexp(input, u64::MAX)
+                .ok()
+                .filter(|output| output.is_success())
+                .map(|output| output.gas_used);
             let mut gas_limits = vec![0, 4_999, 5_000, 5_001, 1_000_000, u64::MAX];
             if let Some(price) = price {
                 gas_limits.extend([price - 1, price, price + 1, price + 9]);
@@ -234,7 +298,10 @@ mod tests {
         );
         assert_eq!(call(HlSpecId::V1, ecrecover, &input, 3_000).unwrap().gas_used, 3_000);
         assert_eq!(call(HlSpecId::V2, ecrecover, &input, 15_000).unwrap().gas_used, 15_000);
-        assert_eq!(call(HlSpecId::V2, ecrecover, &input, 14_999), Err(PrecompileError::OutOfGas));
+        assert_eq!(
+            call(HlSpecId::V2, ecrecover, &input, 14_999),
+            Ok(PrecompileOutput::halt(PrecompileHalt::OutOfGas, 0))
+        );
         assert_eq!(
             call(HlSpecId::V2, ecrecover, &input, 15_000).unwrap().bytes,
             call(HlSpecId::V1, ecrecover, &input, 3_000).unwrap().bytes
@@ -243,6 +310,9 @@ mod tests {
         let pairing = bn254::pair::ADDRESS;
         assert_eq!(call(HlSpecId::V1, pairing, &[], 45_000).unwrap().gas_used, 45_000);
         assert_eq!(call(HlSpecId::V2, pairing, &[], 450_000).unwrap().gas_used, 450_000);
-        assert_eq!(call(HlSpecId::V2, pairing, &[], 449_999), Err(PrecompileError::OutOfGas));
+        assert_eq!(
+            call(HlSpecId::V2, pairing, &[], 449_999),
+            Ok(PrecompileOutput::halt(PrecompileHalt::OutOfGas, 0))
+        );
     }
 }
