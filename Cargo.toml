@@ -26,7 +26,7 @@ lto = "fat"
 codegen-units = 1
 
 [dependencies]
-reth = { git = "https://github.com/hl-archive-node/reth", rev = "c6e0a06b6f2739b63ccd625823d17d333bfdc31b", default-features = false, features = ["gmp"] }
+reth = { git = "https://github.com/hl-archive-node/reth", rev = "c6e0a06b6f2739b63ccd625823d17d333bfdc31b", default-features = false, features = ["gmp", "jemalloc", "js-tracer"] }
 reth-cli = { git = "https://github.com/hl-archive-node/reth", rev = "c6e0a06b6f2739b63ccd625823d17d333bfdc31b" }
 reth-cli-commands = { git = "https://github.com/hl-archive-node/reth", rev = "c6e0a06b6f2739b63ccd625823d17d333bfdc31b" }
 reth-basic-payload-builder = { git = "https://github.com/hl-archive-node/reth", rev = "c6e0a06b6f2739b63ccd625823d17d333bfdc31b" }
