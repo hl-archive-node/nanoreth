@@ -19,14 +19,16 @@ use alloy_json_rpc::RpcObject;
 use alloy_primitives::{B256, Bytes, U256};
 use alloy_rpc_types::{
     BlockTransactions, Filter, FilterChanges, FilterId, Index, Log, TransactionInfo,
-    pubsub::{Params, SubscriptionKind},
+    pubsub::{Params, SubscriptionKind, TransactionReceiptsParams},
 };
 use jsonrpsee::{PendingSubscriptionSink, proc_macros::rpc};
 use jsonrpsee_core::{RpcResult, async_trait};
 use jsonrpsee_types::{ErrorObject, error::INTERNAL_ERROR_CODE};
 use reth::{api::FullNodeComponents, builder::rpc::RpcContext, tasks::TaskExecutor};
 use reth_primitives_traits::SignedTransaction;
-use reth_provider::{BlockIdReader, BlockReader, BlockReaderIdExt, ReceiptProvider};
+use reth_provider::{
+    BlockIdReader, BlockReader, BlockReaderIdExt, CanonStateSubscriptions, ReceiptProvider,
+};
 use reth_rpc::{EthFilter, EthPubSub};
 use reth_rpc_eth_api::{
     EthApiTypes, EthFilterApiServer, FromEthApiError, RpcBlock, RpcConvert, RpcReceipt,
@@ -38,7 +40,7 @@ use reth_rpc_eth_types::EthApiError;
 use serde::{Deserialize, Serialize};
 use std::{marker::PhantomData, sync::Arc};
 use tokio_stream::StreamExt;
-use tracing::{Instrument, trace};
+use tracing::{Instrument, trace, warn};
 
 use super::layer::is_hl_compliant;
 use crate::addons::utils::{EthWrapper, new_headers_stream, pipe_from_stream};
@@ -352,6 +354,7 @@ impl<Eth: EthWrapper> EthLogFilterApiServer<RpcTransaction<Eth::NetworkTypes>>
 
 pub struct HlNodeFilterWs<Eth: EthWrapper> {
     pubsub: Arc<EthPubSub<Eth>>,
+    eth_api: Arc<Eth>,
     provider: Arc<Eth::Provider>,
     subscription_task_spawner: TaskExecutor,
     default_compliant: bool,
@@ -360,15 +363,17 @@ pub struct HlNodeFilterWs<Eth: EthWrapper> {
 impl<Eth: EthWrapper> HlNodeFilterWs<Eth> {
     pub fn new(
         pubsub: Arc<EthPubSub<Eth>>,
+        eth_api: Arc<Eth>,
         provider: Arc<Eth::Provider>,
         subscription_task_spawner: TaskExecutor,
         default_compliant: bool,
     ) -> Self {
-        Self { pubsub, provider, subscription_task_spawner, default_compliant }
+        Self { pubsub, eth_api, provider, subscription_task_spawner, default_compliant }
     }
 }
 
-/// Per-request `?hl=`-aware `eth_subscribe`; only `logs` subscriptions are filtered.
+/// Per-request `?hl=`-aware `eth_subscribe`; `logs` and `transactionReceipts` subscriptions are
+/// filtered.
 #[rpc(server, namespace = "eth")]
 pub trait EthHlPubSubApi {
     #[subscription(
@@ -399,7 +404,8 @@ where
         // resolve before spawning; `ext` is borrowed
         let compliant = is_hl_compliant(ext, self.default_compliant);
         let sink = pending.accept().await?;
-        let (pubsub, provider) = (self.pubsub.clone(), self.provider.clone());
+        let (pubsub, eth_api, provider) =
+            (self.pubsub.clone(), self.eth_api.clone(), self.provider.clone());
         self.subscription_task_spawner.spawn_task(async move {
             if kind == SubscriptionKind::Logs {
                 let filter = match params {
@@ -420,12 +426,94 @@ where
                 }
             } else if kind == SubscriptionKind::NewHeads {
                 let _ = pipe_from_stream(sink, new_headers_stream::<Eth>(&provider)).await;
+            } else if compliant && kind == SubscriptionKind::TransactionReceipts {
+                let filter = match params {
+                    Some(Params::TransactionReceipts(filter)) => filter,
+                    None | Some(Params::None) => TransactionReceiptsParams::default(),
+                    // Same as reth: an invalid param leaves the accepted subscription silent.
+                    _ => return,
+                };
+                let _ = pipe_from_stream(
+                    sink,
+                    compliant_transaction_receipts_stream(eth_api, &provider, filter),
+                )
+                .await;
             } else {
                 let _ = pubsub.handle_accepted(sink, kind, params).await;
             }
         });
         Ok(())
     }
+}
+
+/// `EthSubscriptions::transaction_receipts_stream` with system txs hidden: they occupy the first
+/// `system_tx_count` positions of each block, so they are skipped and the transaction and log
+/// indexes of the remaining receipts are shifted down, as in `adjust_block_receipts`.
+fn compliant_transaction_receipts_stream<Eth: EthWrapper>(
+    eth_api: Arc<Eth>,
+    provider: &Arc<Eth::Provider>,
+    filter: TransactionReceiptsParams,
+) -> impl futures::Stream<Item = Vec<RpcReceipt<Eth::NetworkTypes>>> + Send + Unpin {
+    futures::StreamExt::flat_map(provider.canonical_state_stream(), move |new_chain| {
+        let results: Vec<_> = new_chain
+            .committed()
+            .blocks_and_receipts()
+            .filter_map(|(block, receipts)| {
+                let system_tx_count = block.header().extras.system_tx_count as usize;
+                let block_hash = block.hash();
+                let block_number = block.number();
+                let base_fee = block.base_fee_per_gas();
+                let excess_blob_gas = block.excess_blob_gas();
+                let timestamp = block.timestamp();
+                let mut gas_used = 0;
+                let mut next_log_index = 0;
+
+                let inputs: Vec<_> = block
+                    .transactions_recovered()
+                    .zip(receipts.iter())
+                    .enumerate()
+                    .skip(system_tx_count)
+                    .filter_map(|(idx, (tx, receipt))| {
+                        let gas_used_before = gas_used;
+                        let next_log_index_before = next_log_index;
+                        gas_used = receipt.cumulative_gas_used();
+                        next_log_index += receipt.logs().len();
+
+                        let matches = match &filter.transaction_hashes {
+                            Some(hashes) if !hashes.is_empty() => hashes.contains(tx.tx_hash()),
+                            _ => true,
+                        };
+                        matches.then(|| ConvertReceiptInput {
+                            tx,
+                            gas_used: receipt.cumulative_gas_used() - gas_used_before,
+                            next_log_index: next_log_index_before,
+                            meta: TransactionMeta {
+                                tx_hash: *tx.tx_hash(),
+                                index: (idx - system_tx_count) as u64,
+                                block_hash,
+                                block_number,
+                                base_fee,
+                                excess_blob_gas,
+                                timestamp,
+                            },
+                            receipt: receipt.clone(),
+                        })
+                    })
+                    .collect();
+                if inputs.is_empty() {
+                    return None;
+                }
+                match eth_api.converter().convert_receipts(inputs) {
+                    Ok(receipts) => Some(receipts),
+                    Err(err) => {
+                        warn!(%err, block_number, "Failed to convert receipts for subscription");
+                        None
+                    }
+                }
+            })
+            .collect();
+        futures::stream::iter(results)
+    })
 }
 
 fn adjust_log<Eth: EthWrapper>(mut log: Log, provider: &Eth::Provider) -> Option<Log> {
@@ -1046,6 +1134,7 @@ where
     ctx.modules.replace_configured(
         HlNodeFilterWs::new(
             Arc::new(ctx.registry.eth_handlers().pubsub.clone()),
+            Arc::new(ctx.registry.eth_api().clone()),
             Arc::new(ctx.registry.eth_api().provider().clone()),
             ctx.node().task_executor().clone(),
             default_compliant,
