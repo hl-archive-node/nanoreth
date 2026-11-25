@@ -428,7 +428,7 @@ where
                     target: "rpc::eth",
                     block_number,
                     %err,
-                    "Failed to load read precompile data; running without it"
+                    "Failed to load read precompile data; read precompile calls will fail"
                 )
             })
             .ok()

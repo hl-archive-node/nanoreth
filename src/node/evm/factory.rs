@@ -25,8 +25,8 @@ use revm::{
     database_interface::DBErrorMarker,
     inspector::NoOpInspector,
     precompile::{
-        Precompile as RevmPrecompile, PrecompileHalt, PrecompileId, PrecompileOutput,
-        PrecompileResult, PrecompileSpecId, Precompiles,
+        Precompile as RevmPrecompile, PrecompileError, PrecompileHalt, PrecompileId,
+        PrecompileOutput, PrecompileResult, PrecompileSpecId, Precompiles,
     },
 };
 use std::sync::Arc;
@@ -67,8 +67,16 @@ impl HlEvmFactory {
         I: Inspector<HlContext<DB>>,
     {
         let Some(source) = &self.rpc_precompiles else { return };
-        let (extras, forwarder) = source.precompiles_at(block_number).unwrap_or_default();
-        apply_precompiles_with_forwarder(evm, &extras, forwarder);
+        match source.precompiles_at(block_number) {
+            Some((extras, forwarder)) => apply_precompiles_with_forwarder(evm, &extras, forwarder),
+            // Running with default data would answer read precompile calls with wrong results.
+            // `create_evm` cannot fail, so make every read precompile fail instead: the request
+            // errors only if it reads one.
+            None => install_unavailable_read_precompiles(
+                reth_evm::Evm::precompiles_mut(evm),
+                block_number,
+            ),
+        }
     }
 }
 
@@ -120,6 +128,22 @@ impl EvmFactory for HlEvmFactory {
         let mut evm = HlEvm { inner, inspect: true };
         self.install_rpc_precompiles(&mut evm, block_number);
         evm
+    }
+}
+
+/// Read precompiles live at `0x0800..=0x08FF`.
+const READ_PRECOMPILE_ADDRESSES: core::ops::RangeInclusive<u64> = 0x800..=0x8FF;
+
+fn install_unavailable_read_precompiles(precompiles: &mut PrecompilesMap, block_number: u64) {
+    for address in READ_PRECOMPILE_ADDRESSES {
+        let address = Address::from(alloy_primitives::U160::from(address));
+        precompiles.apply_precompile(&address, |_| {
+            Some(DynPrecompile::from(move |_: PrecompileInput<'_>| -> PrecompileResult {
+                Err(PrecompileError::Fatal(format!(
+                    "read precompile data for block {block_number} is unavailable"
+                )))
+            }))
+        });
     }
 }
 
@@ -314,5 +338,38 @@ mod tests {
             call(HlSpecId::V2, pairing, &[], 449_999),
             Ok(PrecompileOutput::halt(PrecompileHalt::OutOfGas, 0))
         );
+    }
+
+    #[test]
+    fn unavailable_read_precompiles_fail_instead_of_running_without_data() {
+        let mut precompiles = hl_precompiles(HlSpecId::V1);
+        install_unavailable_read_precompiles(&mut precompiles, 42);
+        for address in [0x800u64, 0x80D, 0x8FF] {
+            let address = Address::from(alloy_primitives::U160::from(address));
+            let precompile = precompiles.get(&address).expect("read precompile installed");
+            let mut ctx = EthEvmContext::new(EmptyDB::default(), Default::default());
+            let result = precompile.call(PrecompileInput {
+                data: &[],
+                gas: 100_000,
+                reservoir: 0,
+                caller: Address::ZERO,
+                value: U256::ZERO,
+                target_address: address,
+                is_static: true,
+                bytecode_address: address,
+                internals: EvmInternals::new(
+                    &mut ctx.journaled_state,
+                    &ctx.block,
+                    &ctx.cfg,
+                    &ctx.tx,
+                ),
+            });
+            assert!(
+                matches!(&result, Err(PrecompileError::Fatal(msg)) if msg.contains("block 42")),
+                "{address}: {result:?}"
+            );
+        }
+        // Builtin precompiles are untouched.
+        assert!(precompiles.get(&secp256k1::ECRECOVER.address()).is_some());
     }
 }
