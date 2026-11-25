@@ -95,6 +95,25 @@ echo "$TRACE_RESULT" | jq -e \
     ' > /dev/null \
     && success "$TITLE" || fail "$TITLE - trace_block missing expected tx hashes"
 
+TITLE="debug_traceTransaction should run a JavaScript tracer"
+# reth v2.8.1 builds JS tracing only with its js-tracer feature; without it this returns
+# "JS Tracer is not enabled".
+JS_TRACER='{"tracer":"{steps: 0, step: function() { this.steps++ }, fault: function() {}, result: function() { return this.steps > 0 }}"}'
+RESULT=$(curl -sS -H 'content-type: application/json' \
+    -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"debug_traceTransaction\",\"params\":[\"$MISSING_SUCCESS\",$JS_TRACER]}" \
+    "$TRACE_RPC_URL")
+echo "$RESULT" | jq -e '(.error | not) and (.result == true)' > /dev/null \
+    && success "$TITLE" || fail "$TITLE - returned $RESULT"
+
+TITLE="metrics endpoint should export jemalloc memory gauges"
+# Point METRICS_URL at the node's --metrics address (e.g. http://127.0.0.1:9001).
+if [[ -n "${METRICS_URL:-}" ]]; then
+    curl -sS "$METRICS_URL" | grep -qE '^(reth_)?jemalloc_allocated' \
+        && success "$TITLE" || fail "$TITLE - no jemalloc_allocated metric at $METRICS_URL"
+else
+    echo "Skipped: $TITLE - set METRICS_URL to test the metrics endpoint"
+fi
+
 TITLE="Issue #143 - unknown/unavailable blocks must return null instead of panicking"
 UNKNOWN_HASH=0x1111111111111111111111111111111111111111111111111111111111111111
 FUTURE_BLOCK=0x7fffffffff
