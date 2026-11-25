@@ -30,6 +30,8 @@ const HOURLY_SUBDIR: &str = "hourly";
 const CACHE_SIZE: u32 = 8000;
 const ONE_HOUR: Duration = Duration::from_secs(60 * 60);
 const TAIL_INTERVAL: Duration = Duration::from_millis(25);
+/// How often the ingest loop lists the hourly directory when the next hour's file is missing.
+const MISSING_HOUR_RESCAN_INTERVAL: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone)]
 pub struct HlNodeBlockSourceArgs {
@@ -169,6 +171,42 @@ fn file_has_blocks(path: &Path) -> bool {
     })
 }
 
+/// Finds the hourly file to follow after the one for `dt`.
+///
+/// hl-node writes an hourly file only when it has blocks for that hour, so after a stall or a state
+/// reload the next file can be several hours later. The next hour is checked first; otherwise the
+/// directory is listed, at most once per `MISSING_HOUR_RESCAN_INTERVAL`.
+#[derive(Default)]
+struct NextFileFinder {
+    last_listing: Option<OffsetDateTime>,
+}
+
+impl NextFileFinder {
+    fn find(
+        &mut self,
+        root: &Path,
+        dt: OffsetDateTime,
+        now: OffsetDateTime,
+    ) -> Option<(OffsetDateTime, CurrentFile)> {
+        let next_hour = CurrentFile::from_datetime(dt + ONE_HOUR, root);
+        if file_has_blocks(&next_hour.path) {
+            return Some((dt + ONE_HOUR, next_hour));
+        }
+
+        if self.last_listing.is_some_and(|last| now - last < MISSING_HOUR_RESCAN_INTERVAL) {
+            return None;
+        }
+        self.last_listing = Some(now);
+
+        FileOperations::all_hourly_files(root)?
+            .into_iter()
+            .filter_map(|path| TimeUtils::datetime_from_path(&path).map(|file_dt| (file_dt, path)))
+            .filter(|(file_dt, _)| *file_dt > dt)
+            .find(|(_, path)| file_has_blocks(path))
+            .map(|(file_dt, _)| (file_dt, CurrentFile::from_datetime(file_dt, root)))
+    }
+}
+
 impl HlNodeBlockSource {
     async fn update_last_fetch(
         last_local_fetch: Arc<Mutex<Option<(u64, OffsetDateTime)>>>,
@@ -241,6 +279,7 @@ impl HlNodeBlockSource {
                 tokio::time::sleep(TAIL_INTERVAL).await;
             };
             let mut current_file = CurrentFile::from_datetime(dt, &root);
+            let mut next_file_finder = NextFileFinder::default();
             info!("Starting local ingest loop from height: {}", current_head);
             loop {
                 let _ = current_file.open();
@@ -254,24 +293,28 @@ impl HlNodeBlockSource {
                 }
                 // Check if we should switch to the next hourly file
                 let now = OffsetDateTime::now_utc();
-                let next_dt = dt + ONE_HOUR;
-                if next_dt < now {
-                    let next_file = CurrentFile::from_datetime(next_dt, &root);
-                    if file_has_blocks(&next_file.path) {
-                        // Final scan of current file to catch any late-written blocks
-                        if let Some(line_stream) = &mut current_file.line_stream {
-                            let scan_result = Scanner::scan_hour_file(
-                                line_stream,
-                                ScanOptions { start_height: next_height, only_load_ranges: false },
-                            );
-                            next_height = scan_result.next_expected_height;
-                            cache.lock().await.load_scan_result(scan_result);
-                        }
-                        dt = next_dt;
-                        current_file = next_file;
-                        info!("Moving to new file: {:?}", current_file.path);
-                        continue; // Start reading new file immediately
+                if dt + ONE_HOUR < now
+                    && let Some((next_dt, next_file)) = next_file_finder.find(&root, dt, now)
+                {
+                    // Final scan of current file to catch any late-written blocks
+                    if let Some(line_stream) = &mut current_file.line_stream {
+                        let scan_result = Scanner::scan_hour_file(
+                            line_stream,
+                            ScanOptions { start_height: next_height, only_load_ranges: false },
+                        );
+                        next_height = scan_result.next_expected_height;
+                        cache.lock().await.load_scan_result(scan_result);
                     }
+                    if next_dt != dt + ONE_HOUR {
+                        warn!(
+                            "hl-node wrote no file between {:?} and {:?}; skipping the gap",
+                            current_file.path, next_file.path
+                        );
+                    }
+                    dt = next_dt;
+                    current_file = next_file;
+                    info!("Moving to new file: {:?}", current_file.path);
+                    continue; // Start reading new file immediately
                 }
                 tokio::time::sleep(TAIL_INTERVAL).await;
             }
