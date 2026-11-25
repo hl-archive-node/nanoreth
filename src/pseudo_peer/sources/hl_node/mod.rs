@@ -25,7 +25,9 @@ use tokio::sync::Mutex;
 use tracing::{info, warn};
 
 const HOURLY_SUBDIR: &str = "hourly";
-const CACHE_SIZE: u32 = 8000; // 3660 blocks per hour
+/// About two hours of blocks at steady state (3600 blocks per hour). A catch-up file written after
+/// an hl-node stall can hold more; see `LocalBlocksCache::load_scan_result_for_height`.
+const CACHE_SIZE: u32 = 8000;
 const ONE_HOUR: Duration = Duration::from_secs(60 * 60);
 const TAIL_INTERVAL: Duration = Duration::from_millis(25);
 
@@ -196,7 +198,7 @@ impl HlNodeBlockSource {
             &mut line_stream,
             ScanOptions { start_height: 0, only_load_ranges: false },
         );
-        u_cache.load_scan_result(scan_result);
+        u_cache.load_scan_result_for_height(scan_result, height);
         u_cache.get_block(height)
     }
 
