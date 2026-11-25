@@ -33,8 +33,9 @@ pub struct BlockSourceArgs {
 
     /// Maximum number of concurrent S3 requests when fetching a range of blocks.
     /// Lower it on slow or congested links, where many parallel downloads stall.
+    /// Must be at least 1.
     #[arg(id = "s3.concurrency", long = "s3.concurrency", default_value = "1000")]
-    s3_concurrency: usize,
+    s3_concurrency: std::num::NonZeroUsize,
 
     /// Interval for polling new blocks from RPC source in milliseconds.
     #[arg(id = "rpc.polling-interval", long = "rpc.polling-interval", default_value = "100")]
@@ -64,7 +65,7 @@ impl BlockSourceArgs {
             return Ok(Some(
                 BlockSourceConfig::s3_default(
                     Duration::from_millis(self.s3_polling_interval),
-                    self.s3_concurrency,
+                    self.s3_concurrency.get(),
                 )
                 .await,
             ));
@@ -84,7 +85,7 @@ impl BlockSourceArgs {
                 BlockSourceConfig::s3(
                     bucket.to_string(),
                     Duration::from_millis(self.s3_polling_interval),
-                    self.s3_concurrency,
+                    self.s3_concurrency.get(),
                 )
                 .await,
             ))
@@ -124,4 +125,26 @@ pub struct PseudoPeerCommand {
     /// Example: enode://412...1a@0.0.0.0:30304
     #[arg(long)]
     pub destination_peer: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[derive(Parser)]
+    struct Cli {
+        #[command(flatten)]
+        args: BlockSourceArgs,
+    }
+
+    #[test]
+    fn s3_concurrency_must_be_positive() {
+        // Zero used to be accepted and hung range fetches through the hl-node source forever.
+        assert!(Cli::try_parse_from(["test", "--s3.concurrency", "0"]).is_err());
+        let cli = Cli::try_parse_from(["test", "--s3.concurrency", "8"]).unwrap();
+        assert_eq!(cli.args.s3_concurrency.get(), 8);
+        let cli = Cli::try_parse_from(["test"]).unwrap();
+        assert_eq!(cli.args.s3_concurrency.get(), 1000);
+    }
 }
