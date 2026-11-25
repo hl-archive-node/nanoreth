@@ -370,6 +370,6 @@ mod tests {
             );
         }
         // Builtin precompiles are untouched.
-        assert!(precompiles.get(&secp256k1::ECRECOVER.address()).is_some());
+        assert!(precompiles.get(secp256k1::ECRECOVER.address()).is_some());
     }
 }
