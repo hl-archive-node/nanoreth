@@ -32,6 +32,11 @@ if [[ ! "$ETH_RPC_URL" =~ ^https?:// && ! "$ETH_RPC_URL" =~ ^wss?:// ]]; then
     fail "ETH_RPC_URL must be an http(s) or ws(s) url"
 fi
 
+# System txs are hidden only in hl-node compliant mode, which the system tx receipt test needs while
+# the eth_getLogs test needs them visible. Point HL_RPC_URL at a compliant endpoint (for a
+# multiplexed node, ETH_RPC_URL with ?hl=true); it defaults to ETH_RPC_URL.
+HL_RPC_URL="${HL_RPC_URL:-$ETH_RPC_URL}"
+
 TRACE_RPC_URL="${TRACE_RPC_URL/wss:\/\//https:\/\/}"
 TRACE_RPC_URL="${TRACE_RPC_URL/ws:\/\//http:\/\/}"
 
@@ -83,10 +88,10 @@ echo "$TRACE_RESULT" | jq -e \
     --arg success "$MISSING_SUCCESS" \
     '
     (.error | not) and
-    ([.result[]?.transactionHash] | unique) as $hashes |
-    ($hashes | length) == $expected and
-    ($hashes | index($reverted) != null) and
-    ($hashes | index($success) != null)
+    (([.result[]?.transactionHash] | unique) as $hashes |
+        ($hashes | length) == $expected and
+        ($hashes | index($reverted) != null) and
+        ($hashes | index($success) != null))
     ' > /dev/null \
     && success "$TITLE" || fail "$TITLE - trace_block missing expected tx hashes"
 
@@ -129,7 +134,7 @@ TITLE="Issue #143 - a system tx receipt must return null instead of panicking"
 # and the adjusted index used to underflow. Walk back from the head until a block with system
 # txs turns up; they are sparse on testnet, so allow the window to be widened.
 SCAN_FROM=${SYSTEM_TX_SCAN_FROM:-$(curl -sS -H 'content-type: application/json' \
-    -d '{"jsonrpc":"2.0","id":1,"method":"eth_blockNumber","params":[]}' "$ETH_RPC_URL" \
+    -d '{"jsonrpc":"2.0","id":1,"method":"eth_blockNumber","params":[]}' "$HL_RPC_URL" \
     | jq -r '.result' | { read -r hex; printf '%d' "$hex"; })}
 SCAN_BLOCKS=${SYSTEM_TX_SCAN_BLOCKS:-2000}
 SYSTEM_TX=""
@@ -137,13 +142,13 @@ for ((i = 0; i < SCAN_BLOCKS; i++)); do
     BLOCK=$(printf '0x%x' $((SCAN_FROM - i)))
     SYSTEM_TX=$(curl -sS -H 'content-type: application/json' \
         -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"eth_getBlockReceiptsWithSystemTx\",\"params\":[\"$BLOCK\"]}" \
-        "$ETH_RPC_URL" | jq -r '.result.systemTxReceipts[0].transactionHash // empty')
+        "$HL_RPC_URL" | jq -r '.result.systemTxReceipts[0].transactionHash // empty')
     [[ -n "$SYSTEM_TX" ]] && break
 done
 if [[ -n "$SYSTEM_TX" ]]; then
     RESULT=$(curl -sS -H 'content-type: application/json' \
         -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"eth_getTransactionReceipt\",\"params\":[\"$SYSTEM_TX\"]}" \
-        "$ETH_RPC_URL")
+        "$HL_RPC_URL")
     echo "$RESULT" | jq -e '(.error | not) and (.result == null)' > /dev/null \
         && success "$TITLE ($SYSTEM_TX)" || fail "$TITLE - $SYSTEM_TX returned $RESULT"
 else
