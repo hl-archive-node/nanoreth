@@ -21,10 +21,10 @@ pub trait EthForwarderApi<R: RpcObject> {
     #[method(name = "sendRawTransaction")]
     async fn send_raw_transaction(&self, tx: Bytes) -> RpcResult<B256>;
 
-    #[method(name = "eth_sendTransaction")]
+    #[method(name = "sendTransaction")]
     async fn send_transaction(&self, _tx: TransactionRequest) -> RpcResult<B256>;
 
-    #[method(name = "eth_sendRawTransactionSync")]
+    #[method(name = "sendRawTransactionSync")]
     async fn send_raw_transaction_sync(&self, tx: Bytes) -> RpcResult<R>;
 }
 
@@ -90,5 +90,23 @@ impl EthForwarderApiServer<RpcReceipt<Ethereum>> for EthForwarderExt {
             Err(EthApiError::TransactionConfirmationTimeout { hash, duration: TIMEOUT_DURATION }
                 .into())
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn methods_register_under_the_eth_namespace_once() {
+        // The namespace already adds the `eth_` prefix; repeating it in a method name registered
+        // `eth_eth_*`, so `eth_sendRawTransactionSync` fell through to the default handler.
+        let methods = EthForwarderExt::new("http://127.0.0.1:1".to_owned()).into_rpc();
+        let mut names: Vec<_> = methods.method_names().collect();
+        names.sort_unstable();
+        assert_eq!(
+            names,
+            ["eth_sendRawTransaction", "eth_sendRawTransactionSync", "eth_sendTransaction"]
+        );
     }
 }

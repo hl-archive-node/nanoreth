@@ -114,6 +114,22 @@ else
     echo "Skipped: $TITLE - set METRICS_URL to test the metrics endpoint"
 fi
 
+TITLE="eth_sendRawTransactionSync should be forwarded upstream like eth_sendRawTransaction"
+# The forwarder registered it as eth_eth_sendRawTransactionSync, so the real method fell through
+# to the local handler and panicked. An undecodable tx is rejected upstream, so nothing is sent;
+# both methods must return that same upstream error.
+send_invalid_tx() {
+    curl -sS -H 'content-type: application/json' \
+        -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"$1\",\"params\":[\"0x00\"]}" \
+        "$ETH_RPC_URL"
+}
+ASYNC=$(send_invalid_tx eth_sendRawTransaction || true)
+SYNC=$(send_invalid_tx eth_sendRawTransactionSync || true)
+echo "$ASYNC" | jq -e '.error.message | type == "string"' > /dev/null \
+    || fail "$TITLE - eth_sendRawTransaction returned $ASYNC"
+[[ "$(echo "$SYNC" | jq -c .error)" == "$(echo "$ASYNC" | jq -c .error)" ]] \
+    && success "$TITLE" || fail "$TITLE - eth_sendRawTransactionSync returned $SYNC"
+
 TITLE="Issue #143 - unknown/unavailable blocks must return null instead of panicking"
 UNKNOWN_HASH=0x1111111111111111111111111111111111111111111111111111111111111111
 FUTURE_BLOCK=0x7fffffffff
