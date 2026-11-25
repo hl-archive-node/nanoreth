@@ -31,7 +31,7 @@ impl LocalBlocksCache {
     /// stall). Loading it in file order would evict its first blocks again, while the range index
     /// still points at the file, so `height` could never be served from it.
     pub fn load_scan_result_for_height(&mut self, scan_result: ScanResult, height: u64) {
-        let window = height..height.saturating_add(self.cache_size as u64);
+        let window = height..height.saturating_add(u64::from(self.cache_size));
         let (window_blocks, rest): (Vec<_>, Vec<_>) =
             scan_result.new_blocks.into_iter().partition(|blk| window.contains(&block_number(blk)));
         for blk in rest.into_iter().chain(window_blocks) {
